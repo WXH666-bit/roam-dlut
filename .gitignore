@@ -5,7 +5,7 @@
 .codegraph/
 
 # 静态资源与项目无关产物（不推送 GitHub）
-client/assets/
+# 注意：client/assets/ 已移出本列表——图标与启动图是构建必需资源，需要进仓库
 /assets/
 
 # Agent / 平台工具文件（不推送 GitHub）
