@@ -1,3 +1,15 @@
+# Coze 平台相关（不推送 GitHub）
+.coze
+.cozeproj/
+.preview
+.codegraph/
+
+# 静态资源与项目无关产物（不推送 GitHub）
+client/assets/
+
+# 后端运行时数据
+server/data/
+
 # Logs
 logs
 *.log

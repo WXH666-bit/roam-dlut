@@ -1,0 +1,296 @@
+import React, { useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Platform,
+  ScrollView,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
+import { Image } from 'expo-image';
+import * as ImagePicker from 'expo-image-picker';
+import { FontAwesome6 } from '@expo/vector-icons';
+import Toast from 'react-native-toast-message';
+import { Screen } from '@/components/Screen';
+import { NightSky } from '@/components/NightSky';
+import { RichText } from '@/components/RichText';
+import { StickerIcon } from '@/components/StickerIcon';
+import { useApp } from '@/contexts/AppContext';
+import { useSafeRouter } from '@/hooks/useSafeRouter';
+import { publishMessage, uploadMedia } from '@/utils/api';
+import { STICKERS, stickerToken } from '@/utils/stickers';
+import type { MessageMediaType } from '@/utils/messageTypes';
+
+const MAX_LEN = 140;
+const INK = '#3E3626';
+const PAPER = '#F6EFDD';
+
+interface PickedMedia {
+  uri: string;
+  kind: 'image' | 'video';
+  mimeType: string;
+  fileName: string;
+}
+
+export default function ComposeScreen() {
+  const router = useSafeRouter();
+  const { deviceId, location, refreshMessages } = useApp();
+
+  const [text, setText] = useState('');
+  const [media, setMedia] = useState<PickedMedia | null>(null);
+  const [publishing, setPublishing] = useState(false);
+  const selectionRef = useRef({ start: 0, end: 0 });
+  const inputRef = useRef<TextInput>(null);
+
+  const insertSticker = (id: string) => {
+    const token = stickerToken(id);
+    const { start, end } = selectionRef.current;
+    const next = text.slice(0, start) + token + text.slice(end);
+    if (next.length > MAX_LEN) {
+      Toast.show({ type: 'info', text1: '字数快满了，贴纸放不下了' });
+      return;
+    }
+    setText(next);
+    const pos = start + token.length;
+    selectionRef.current = { start: pos, end: pos };
+    // 尽力恢复光标位置（Web 端不支持则落到末尾，可接受）
+    setTimeout(() => {
+      inputRef.current?.setNativeProps?.({ selection: { start: pos, end: pos } });
+    }, 30);
+  };
+
+  const pickMedia = async (kind: 'image' | 'video') => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: kind === 'image' ? ['images'] : ['videos'],
+      quality: 0.85,
+      videoMaxDuration: 60,
+      allowsMultipleSelection: false,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    const asset = result.assets[0];
+    const mimeType =
+      asset.mimeType ?? (kind === 'image' ? 'image/jpeg' : 'video/mp4');
+    const ext = asset.uri.split('.').pop()?.split('?')[0] || (kind === 'image' ? 'jpg' : 'mp4');
+    setMedia({
+      uri: asset.uri,
+      kind,
+      mimeType,
+      fileName: `cidi_${Date.now()}.${ext}`,
+    });
+  };
+
+  const publish = async () => {
+    if (!deviceId || publishing) return;
+    if (!text.trim()) {
+      Toast.show({ type: 'info', text1: '说点什么吧，哪怕一句也好' });
+      return;
+    }
+    if (!location) {
+      Toast.show({ type: 'error', text1: '还没有找到你的位置，等定位好了再藏' });
+      return;
+    }
+    setPublishing(true);
+    try {
+      let mediaType: MessageMediaType = 'none';
+      let mediaKey: string | undefined;
+      if (media) {
+        const uploaded = await uploadMedia(media.uri, media.fileName, media.mimeType);
+        mediaType = media.kind;
+        mediaKey = uploaded.key;
+      }
+      await publishMessage({
+        deviceId,
+        text: text.trim(),
+        mediaType,
+        mediaKey,
+        lat: location.lat,
+        lng: location.lng,
+      });
+      await refreshMessages();
+      Toast.show({ type: 'success', text1: '已藏在此地，等一个路过的人。' });
+      router.back();
+    } catch (e) {
+      Toast.show({ type: 'error', text1: e instanceof Error ? e.message : '没藏成功，再试一次' });
+    } finally {
+      setPublishing(false);
+    }
+  };
+
+  return (
+    <Screen backgroundColor="#0B0E23">
+      <NightSky />
+      {/* 头部 */}
+      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', paddingHorizontal: 16, paddingVertical: 10 }}>
+        <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={{ padding: 6 }}>
+          <FontAwesome6 name="arrow-left" size={17} color="#EDE7F6" />
+        </TouchableOpacity>
+        <Text style={{ fontFamily: 'MaShanZheng_400Regular', fontSize: 18, color: '#EDE7F6', letterSpacing: 2 }}>
+          藏一句话
+        </Text>
+        <View style={{ width: 29 }} />
+      </View>
+
+      <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 20, paddingBottom: 60 }}>
+        {/* 信纸输入区 */}
+        <View style={{ backgroundColor: PAPER, borderRadius: 20, padding: 18, minHeight: 190 }}>
+          <TextInput
+            ref={inputRef}
+            value={text}
+            onChangeText={(t) => setText(t.slice(0, MAX_LEN + 20))}
+            onSelectionChange={(e) => {
+              selectionRef.current = e.nativeEvent.selection;
+            }}
+            placeholder="写给那个会路过这里的陌生人……"
+            placeholderTextColor="rgba(62,54,38,0.35)"
+            multiline
+            maxLength={MAX_LEN + 20}
+            style={{
+              minHeight: 140,
+              fontSize: 16.5,
+              lineHeight: 28,
+              color: INK,
+              textAlignVertical: 'top',
+              ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as never : {}),
+            }}
+          />
+          <Text style={{ alignSelf: 'flex-end', fontSize: 12, color: 'rgba(62,54,38,0.45)', marginTop: 4 }}>
+            {text.length}/{MAX_LEN}
+          </Text>
+        </View>
+
+        {/* 贴纸栏 */}
+        <Text style={{ marginTop: 18, marginBottom: 10, fontSize: 12.5, color: 'rgba(142,139,163,0.9)', letterSpacing: 1 }}>
+          塞一点魔法进去
+        </Text>
+        <View>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} keyboardShouldPersistTaps="always">
+            <View style={{ flexDirection: 'row', gap: 8 }}>
+              {STICKERS.map((s) => (
+                <TouchableOpacity
+                  key={s.id}
+                  onPress={() => insertSticker(s.id)}
+                  style={{
+                    width: 46,
+                    height: 46,
+                    borderRadius: 14,
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    backgroundColor: 'rgba(255,255,255,0.06)',
+                    borderWidth: 1,
+                    borderColor: 'rgba(255,255,255,0.10)',
+                  }}
+                >
+                  <StickerIcon id={s.id} size={26} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          </ScrollView>
+        </View>
+
+        {/* 贴纸预览（含贴纸时显示） */}
+        {text.includes('[em:') && (
+          <View style={{ marginTop: 16, padding: 14, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.05)', borderWidth: 1, borderColor: 'rgba(255,255,255,0.08)' }}>
+            <Text style={{ fontSize: 11, color: 'rgba(142,139,163,0.8)', marginBottom: 8 }}>路上的人看到的会是这样</Text>
+            <RichText text={text} fontSize={15} lineHeight={26} color="#EDE7F6" />
+          </View>
+        )}
+
+        {/* 媒体 */}
+        <Text style={{ marginTop: 20, marginBottom: 10, fontSize: 12.5, color: 'rgba(142,139,163,0.9)', letterSpacing: 1 }}>
+          也可以留下一点画面（可选）
+        </Text>
+        {!media ? (
+          <View style={{ flexDirection: 'row', gap: 12 }}>
+            <MediaButton icon="image" label="一张照片" onPress={() => pickMedia('image')} />
+            <MediaButton icon="video" label="一段视频（≤60秒）" onPress={() => pickMedia('video')} />
+          </View>
+        ) : (
+          <View style={{ borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' }}>
+            {media.kind === 'image' ? (
+              <Image source={{ uri: media.uri }} style={{ width: '100%', height: 200 }} contentFit="cover" />
+            ) : (
+              <View style={{ width: '100%', height: 120, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)' }}>
+                <FontAwesome6 name="video" size={22} color="#F5C26B" />
+                <Text style={{ marginTop: 8, fontSize: 12, color: '#8E8BA3' }}>已选好一段视频</Text>
+              </View>
+            )}
+            <TouchableOpacity
+              onPress={() => setMedia(null)}
+              style={{
+                position: 'absolute',
+                top: 10,
+                right: 10,
+                width: 30,
+                height: 30,
+                borderRadius: 15,
+                alignItems: 'center',
+                justifyContent: 'center',
+                backgroundColor: 'rgba(11,14,35,0.7)',
+              }}
+            >
+              <FontAwesome6 name="xmark" size={14} color="#EDE7F6" />
+            </TouchableOpacity>
+          </View>
+        )}
+
+        {/* 发布 */}
+        <TouchableOpacity
+          onPress={publish}
+          disabled={publishing}
+          activeOpacity={0.85}
+          style={{
+            marginTop: 34,
+            height: 54,
+            borderRadius: 999,
+            alignItems: 'center',
+            justifyContent: 'center',
+            backgroundColor: publishing ? 'rgba(245,194,107,0.4)' : '#F5C26B',
+            shadowColor: '#F5C26B',
+            shadowOpacity: 0.4,
+            shadowRadius: 20,
+            shadowOffset: { width: 0, height: 0 },
+            elevation: 8,
+          }}
+        >
+          {publishing ? (
+            <ActivityIndicator color="#0B0E23" />
+          ) : (
+            <Text style={{ fontSize: 16, fontWeight: '700', color: '#0B0E23', letterSpacing: 2 }}>藏在此地</Text>
+          )}
+        </TouchableOpacity>
+        <Text style={{ marginTop: 14, textAlign: 'center', fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
+          它会藏在你现在的位置，等一个路过的人 · 30 天或 99 人读到后消散
+        </Text>
+        {!location && (
+          <Text style={{ marginTop: 8, textAlign: 'center', fontSize: 12, color: '#F2A7C8' }}>
+            还没找到你的位置，先等等定位，或去演示模式设置虚拟位置
+          </Text>
+        )}
+      </ScrollView>
+    </Screen>
+  );
+}
+
+function MediaButton({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={{
+        flex: 1,
+        height: 48,
+        borderRadius: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 8,
+        backgroundColor: 'rgba(255,255,255,0.06)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.10)',
+      }}
+    >
+      <FontAwesome6 name={icon} size={15} color="#A79BFA" />
+      <Text style={{ fontSize: 13, color: '#EDE7F6' }}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
