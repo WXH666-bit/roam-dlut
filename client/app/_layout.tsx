@@ -21,6 +21,7 @@ export default function RootLayout() {
         }}
       >
         <Stack.Screen name="index" options={{ title: "" }} />
+        <Stack.Screen name="onboarding" options={{ title: "", animation: 'fade', gestureEnabled: false }} />
         <Stack.Screen name="compose" options={{ title: "", animation: 'slide_from_bottom' }} />
         <Stack.Screen name="profile" options={{ title: "" }} />
       </Stack>

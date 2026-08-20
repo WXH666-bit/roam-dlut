@@ -11,7 +11,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useFocusEffect } from 'expo-router';
+import { Redirect, useFocusEffect } from 'expo-router';
 import { FontAwesome6 } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
 import { Screen } from '@/components/Screen';
@@ -83,6 +83,7 @@ export default function HomeScreen() {
     refreshMessages,
     readIds,
     user,
+    onboarded,
   } = useApp();
 
   const [moodIndex, setMoodIndex] = useState(0);
@@ -134,6 +135,18 @@ export default function HomeScreen() {
   }, [location, aliveMessages, readIds]);
 
   const waitingText = useMemo(() => (aliveTotal > 0 ? '条留言正在等待' : '条留言刚刚都消散了'), [aliveTotal]);
+
+  // 首次启动先去引导页；标志位读取中先只铺夜空
+  if (onboarded === null) {
+    return (
+      <Screen backgroundColor="#0B0E23" safeAreaEdges={['left', 'right', 'bottom']}>
+        <NightSky />
+      </Screen>
+    );
+  }
+  if (onboarded === false) {
+    return <Redirect href="/onboarding" />;
+  }
 
   return (
     <Screen backgroundColor="#0B0E23" safeAreaEdges={['left', 'right', 'bottom']}>

@@ -43,12 +43,18 @@ interface AppContextValue {
   // 已读缓存（本地）
   readIds: Set<string>;
   markRead: (id: string) => void;
+  // 首次引导：null=读取中，false=未引导（首页重定向去引导页）
+  onboarded: boolean | null;
+  completeOnboarding: () => Promise<void>;
+  // 读满消散阈值（来自 GET /messages 的 read_limit，未拉到前默认 99）
+  readLimit: number;
 }
 
 const AppContext = createContext<AppContextValue | null>(null);
 
 const READ_IDS_KEY = 'cidi:read_ids';
 const DEVICE_TOKEN_KEY = 'cidi:device_token';
+const ONBOARDED_KEY = 'cidi:onboarded';
 const POLL_INTERVAL = 30_000;
 
 export function AppProvider({ children }: { children: ReactNode }) {
@@ -62,6 +68,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [aliveMessages, setAliveMessages] = useState<AliveMessageBrief[]>([]);
   const [aliveTotal, setAliveTotal] = useState(0);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [onboarded, setOnboarded] = useState<boolean | null>(null);
+  const [readLimit, setReadLimit] = useState(99);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
 
   // 启动：设备注册 + 已读缓存恢复
@@ -90,6 +98,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (raw) setReadIds(new Set(JSON.parse(raw) as string[]));
       } catch {
         // 已读缓存损坏则从空开始
+      }
+      try {
+        const ob = await AsyncStorage.getItem(ONBOARDED_KEY);
+        setOnboarded(ob === '1');
+      } catch {
+        setOnboarded(false);
       }
     })();
   }, []);
@@ -138,6 +152,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const data = await fetchAliveMessages();
       setAliveMessages(data.list);
       setAliveTotal(data.total);
+      setReadLimit(data.read_limit);
     } catch (e) {
       console.warn('[app] fetch messages failed:', e);
     }
@@ -175,6 +190,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
     setMockLocationState(loc);
   }, []);
 
+  const completeOnboarding = useCallback(async () => {
+    setOnboarded(true);
+    try {
+      await AsyncStorage.setItem(ONBOARDED_KEY, '1');
+    } catch {
+      // 持久化失败则下次启动再引导一次，不阻塞进入
+    }
+  }, []);
+
   const location = demoMode ? mockLocation : gpsLocation;
 
   const value = useMemo<AppContextValue>(
@@ -194,10 +218,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       refreshMessages,
       readIds,
       markRead,
+      onboarded,
+      completeOnboarding,
+      readLimit,
     }),
     [
       deviceId, deviceToken, user, location, locationReady, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, markRead,
+      onboarded, completeOnboarding, readLimit,
     ]
   );
 
