@@ -4,7 +4,7 @@
   "type": "module",
   "scripts": {
     "build": "node build.js",
-    "dev": "bash ../.cozeproj/scripts/server_dev_run.sh",
+    "dev": "tsx watch ./src/index.ts",
     "preinstall": "npx only-allow pnpm",
     "start": "NODE_ENV=production PORT=${PORT:-5000} node dist/index.js",
     "lint": "tsc --noEmit"

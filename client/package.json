@@ -1,13 +1,11 @@
 {
-  "name": "expo-app",
-  "description": "my-expo-app",
+  "name": "roam-dlut-client",
+  "description": "此地有话 · 校园地理留言 App",
   "main": "expo-router/entry",
   "private": true,
   "scripts": {
-    "check-deps": "npx depcheck",
-    "postinstall": "npm run install-missing",
-    "install-missing": "node ./scripts/install-missing-deps.js",
-    "lint": "tsc --noEmit; eslint ./ -f ./scripts/formatter.mjs --quiet",
+    "dev": "expo start",
+    "lint": "tsc --noEmit; eslint ./ --quiet",
     "start": "expo start --web --clear",
     "test": "jest --watchAll"
   },

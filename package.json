@@ -3,13 +3,11 @@
   "private": true,
   "version": "0.0.0",
   "scripts": {
-    "dev": "bash .cozeproj/scripts/dev_run.sh",
-    "build": "bash .cozeproj/scripts/prod_build.sh",
-    "start": "bash .cozeproj/scripts/prod_run.sh",
+    "dev": "pnpm --parallel -r --filter=./server --filter=./client run dev",
+    "start": "pnpm --filter=./client run start",
     "preinstall": "npx only-allow pnpm",
-    "lint:client": "npm run lint --prefix ./client",
-    "lint:server": "npm run lint --prefix ./server",
-    "lint:all": "npm run lint --prefix ./client; npm run lint --prefix ./server",
+    "lint:client": "pnpm --filter=./client run lint",
+    "lint:server": "pnpm --filter=./server run lint",
     "validate": "pnpm dlx concurrently --group --names expo,server \"pnpm lint:client\" \"pnpm lint:server\""
   },
   "dependencies": {},

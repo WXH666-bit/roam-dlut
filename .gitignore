@@ -6,6 +6,11 @@
 
 # 静态资源与项目无关产物（不推送 GitHub）
 client/assets/
+/assets/
+
+# Agent / 平台工具文件（不推送 GitHub）
+AGENTS.md
+client/scripts/
 
 # 后端运行时数据
 server/data/

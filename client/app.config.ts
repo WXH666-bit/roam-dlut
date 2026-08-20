@@ -1,29 +1,27 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
 
-const appName = process.env.COZE_PROJECT_NAME || process.env.EXPO_PUBLIC_COZE_PROJECT_NAME || '应用';
-const projectId = process.env.COZE_PROJECT_ID || process.env.EXPO_PUBLIC_COZE_PROJECT_ID;
-const slugAppName = projectId ? `app${projectId}` : 'myapp';
-
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
-    "name": appName,
-    "slug": slugAppName,
+    "name": "此地有话",
+    "slug": "roam-dlut",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
-    "scheme": "myapp",
-    "userInterfaceStyle": "automatic",
+    "scheme": "cidi",
+    "userInterfaceStyle": "dark",
     "newArchEnabled": true,
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "bundleIdentifier": "com.roamdlut.cidi"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#ffffff"
+        "backgroundColor": "#0B0E23"
       },
-      "package": `com.anonymous.x${projectId || '0'}`
+      "package": "com.roamdlut.cidi",
+      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "VIBRATE"]
     },
     "web": {
       "bundler": "metro",
@@ -43,28 +41,28 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#ffffff"
+          "backgroundColor": "#0B0E23"
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": `允许WXH666-bit/roam-dlut访问您的相册，以便您上传或保存图片。`,
-          "cameraPermission": `允许WXH666-bit/roam-dlut使用您的相机，以便您直接拍摄照片上传。`,
-          "microphonePermission": `允许WXH666-bit/roam-dlut访问您的麦克风，以便您拍摄带有声音的视频。`
+          "photosPermission": "允许「此地有话」访问您的相册，以便您为留言配上照片。",
+          "cameraPermission": "允许「此地有话」使用您的相机，以便您直接拍摄照片上传。",
+          "microphonePermission": "允许「此地有话」访问您的麦克风，以便您拍摄带有声音的视频。"
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": `WXH666-bit/roam-dlut需要访问您的位置以提供周边服务及导航功能。`
+          "locationWhenInUsePermission": "「此地有话」需要访问您的位置，才能感知附近的留言。"
         }
       ],
       [
         "expo-camera",
         {
-          "cameraPermission": `WXH666-bit/roam-dlut需要访问相机以拍摄照片和视频。`,
-          "microphonePermission": `WXH666-bit/roam-dlut需要访问麦克风以录制视频声音。`,
+          "cameraPermission": "「此地有话」需要访问相机以拍摄照片和视频。",
+          "microphonePermission": "「此地有话」需要访问麦克风以录制视频声音。",
           "recordAudioAndroid": true
         }
       ]

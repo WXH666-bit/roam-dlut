@@ -1,261 +1,101 @@
-# Expo App + Express.js
+# 此地有话 · roam-dlut
 
-## 目录结构规范（严格遵循）
+> 把留言藏在校园的真实地理位置上。没有地图，没有提示——只有走到那条留言 50 米以内，它才会浮现。
 
-当前仓库是一个 monorepo（基于 pnpm 的 workspace）
+「此地有话」是一款面向大连理工大学学生的校园地理留言 App（Android）。任何人都可以在某个位置藏下一句话、一张照片或一段视频；每条留言存活 30 天，或被读满 99 人，任一条件到达即永久消散。它是写给陌生人的信、藏在校园里的彩蛋、稍纵即逝的偶遇——机不可失。
 
-- Expo 代码在 client 目录，Express.js 代码在 server 目录
-- 本模板默认无 Tab Bar，可按需改造
+## 核心玩法
 
-├── client/                     # React Native 前端代码
-│   ├── app/                    # Expo Router 路由目录（仅路由配置）
-│   │   ├── _layout.tsx         # 根布局文件（必需，务必阅读）
-│   │   └── index.tsx           # 首页
-│   ├── screens/                # 页面实现目录（与 app/ 路由对应）
-│   │   └── demo/               # 示例页面
-│   │       └── index.tsx
-│   ├── components/             # 可复用组件
-│   │   └── Screen.tsx          # 页面容器组件（必用）
-│   ├── hooks/                  # 自定义 Hooks
-│   ├── contexts/               # React Context 代码
-│   ├── utils/                  # 工具函数
-│   ├── assets/                 # 静态资源
-|   └── package.json            # Expo 应用 package.json
-├── server/                     # 服务端代码根目录 (Express.js)
-|   ├── src/
-│   │   └── index.ts            # 服务端入口文件
-|   └── package.json            # 服务端 package.json
-├── package.json
-├── .cozeproj                   # 预置脚手架脚本（禁止修改）
-└── .coze                       # 配置文件（禁止修改）
+- **守候**：主界面只显示"此刻，校园里有 N 条留言正在等待"，没有任何位置信息
+- **偶遇**：走到某条未读留言 50m 内，手机震动，屏幕浮现一枚发光光点，点开即读
+- **藏言**：在某个有感触的地方，写下 140 字以内的话，可配手绘贴纸、1 张照片或 1 段视频
+- **消散**：存活满 30 天或被读满 99 人（按设备去重），留言永久消散——错过就是错过
 
-## 样式方案
+## 技术栈
 
-基于 tailwindcss 进行样式开发（底层基于 Uniwind）
+| 端 | 技术 |
+|---|---|
+| App（`client/`） | Expo 54 · React Native · Expo Router · Uniwind(Tailwind v4) · Reanimated |
+| Mock 后端（`server/`） | Express · tsx · 内存数据 + JSON 持久化（替代开发期的团队 MySQL 服务） |
+| 包管理 | pnpm workspace monorepo |
 
-写法示例：
-
-```tsx
-<View className="flex-1 bg-white dark:bg-gray-900 p-4"></View>
-```
-
-```tsx
-<Text
-  className="text-lg font-bold text-gray-900 dark:text-white"
-  selectionColorClassName="accent-blue-500"
->
-  Hello World
-</Text>
-```
-
-Uniwind 官方文档：https://docs.uniwind.dev/llms.txt
-
-## 如何进行静态校验（TSC + ESLint）
+## 快速开始
 
 ```bash
-# 对 client 和 server 目录同时进行校验
-pnpm -w lint:all
+# 1. 安装依赖（必须用 pnpm）
+pnpm install
 
-# 对 client 目录进行校验
-pnpm -w lint:client
+# 2. 配置 App 端后端地址
+cp client/.env.example client/.env
 
-# 对 server 目录进行校验
-pnpm -w lint:server
+# 3. 同时启动后端与 App（两个进程）
+pnpm dev
 ```
 
-## 如何修改主题模式（跟随系统、固定暗色、固定亮色）
+- 后端：`http://localhost:9091`（健康检查 `GET /api/v1/health`）
+- App：`http://localhost:8081`（Expo DevTools；手机装 Expo Go 扫码，或 `pnpm --filter=./client exec expo run:android` 真机运行）
 
-默认为跟随系统，如果用户明确指定为“暗色”或“亮色”，需要修改 `client/components/ColorSchemeUpdater.tsx` 的 `DEFAULT_THEME` 变量为合适的值
+> 后端首次启动会自动播种 40 条校园种子留言（分布在大连理工大学各真实地标附近，含图片与短视频样例）。
 
-## 如何定制主题 design tokens
+## 开发者模式（演示模式）
 
-当前项目的**设计系统**基于 tailwindcss 实现，核心入口文件为 `client/global.css`，如果需要定制主题，应该**阅读并修改 `client/global.css` 文件**
+偶遇依赖真实 GPS，在模拟器、网页或答辩现场无法走动时，用演示模式虚拟定位：
 
-## 路由及 Tab Bar 实现规范
+1. 打开 App，点右上角进入「**我的**」
+2. 滑到页面底部，找到版本号文字「**此地有话 v1.0.0 · 写给陌生人的信**」
+3. **连续点击版本号 5 次**，开启演示模式
+4. 屏幕右侧出现虚拟定位面板：
+   - 顶部显示当前模拟坐标
+   - **方向按钮**：按步长微调经纬度（步长档位约 11m / 55m / 111m）
+   - **「跳到留言旁」列表**：一键把模拟位置设到某条存活留言的 50m 范围内——立即触发震动 + 光点 + 开信全流程
+5. 面板内可随时**关闭演示模式**，恢复真实 GPS
 
-### 方案一：无 Tab Bar（Stack 导航）
-
-适用于线性流程应用，采用简化的目录结构：
-
-```
-client/app/
-├── _layout.tsx         # 根布局（Stack 导航配置）
-├── index.tsx           # 应用入口
-├── detail.tsx          # 详情页（通过 params 传递数据）
-└── +not-found.tsx      # 404 页面
-```
-
-**根布局配置** `client/app/_layout.tsx`：
-
-以下仅为代码片段供写法参考
-
-```tsx
-<Stack screenOptions={{ headerShown: false }}>
-  <Stack.Screen name="index" />
-  <Stack.Screen name="detail" />
-</Stack>
-```
-
-**应用入口** `client/app/index.tsx`：
-```tsx
-export { default } from "@/screens/home";
-```
-> **禁止事项**：无 Tab Bar 场景下，不得创建 `(tabs)` 目录。
-
-### 方案二：有 Tab Bar（Tabs 导航）
-
-采用路由分组实现底部导航栏：
-```
-client/app/
-├── _layout.tsx              # 根布局
-├── (tabs)/
-│   ├── _layout.tsx          # Tab 导航配置
-│   ├── index.tsx            # 默认 Tab（必须存在）
-│   ├── discover.tsx         # 发现页
-│   └── profile.tsx          # 个人中心
-├── detail.tsx               # Tab 外的独立页面（通过 params 传递数据）
-└── +not-found.tsx
-```
-> **⚠️ [CRITICAL]**： `app/index.tsx` 优先级高于 `(tabs)/index.tsx`，会导致首页无 Tab Bar。**当有(tabs)/index.tsx时必须删除 `app/index.tsx`**。
-
-**根布局配置** `client/app/_layout.tsx`：
-
-以下仅为代码片段供写法参考
-
-```tsx
-<Stack screenOptions={{ headerShown: false }}>
-  <Stack.Screen name="(tabs)" />
-  <Stack.Screen name="detail" />
-</Stack>
-```
-
-**应用入口** `client/app/(tabs)/index.tsx`：
-```tsx
-export { default } from "@/screens/home";
-```
-
-**Tab 布局配置** `client/app/(tabs)/_layout.tsx`：
-
-```tsx
-import { Tabs } from 'expo-router';
-import { Platform } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { FontAwesome6 } from '@expo/vector-icons';
-import { useCSSVariable } from 'uniwind';
-
-export default function TabLayout() {
-  const insets = useSafeAreaInsets();
-  const [background, muted, accent, border] = useCSSVariable([
-    '--color-background',
-    '--color-muted',
-    '--color-accent',
-    '--color-border',
-  ]) as string[];
-
-  let tabBarStyle = {
-    backgroundColor: background,
-    borderTopWidth: 1,
-    borderTopColor: border,
-  };
-
-  // 用于修复 Web 上高度异常的问题（这个 if 逻辑必须添加）
-  if (Platform.OS === 'web') {
-    tabBarStyle = {
-      ...tabBarStyle,
-      height: 'auto',
-    }
-  }
-
-  return (
-    <Tabs
-      screenOptions={{
-        headerShown: false,
-        tabBarStyle,
-        tabBarActiveTintColor: accent,
-        tabBarInactiveTintColor: muted,
-      }}
-    >
-      {/* name 必须与文件名完全一致 */}
-      <Tabs.Screen
-        name="index"
-        options={{
-          title: '首页',
-          tabBarIcon: ({ color }) => (
-            <FontAwesome6 name="house" size={20} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="discover"
-        options={{
-          title: '发现',
-          tabBarIcon: ({ color }) => (
-            <FontAwesome6 name="compass" size={20} color={color} />
-          ),
-        }}
-      />
-      <Tabs.Screen
-        name="profile"
-        options={{
-          title: '我的',
-          tabBarIcon: ({ color }) => (
-            <FontAwesome6 name="user" size={20} color={color} />
-          ),
-        }}
-      />
-    </Tabs>
-  );
-}
-```
-
-**Tab 页面文件** `client/app/(tabs)/index.tsx`：
-```tsx
-export { default } from "@/screens/home";
-```
-
-### 注意事项
-
-在改动 `client/app/_layout.tsx` 前，必须先阅读该文件，再进行修改操作
-
-以下是需要保留的重要逻辑
-
-- 保留 global.css 引入（tailwindcss 生效的关键）
-- 保留 Provider 的使用
-
-## 依赖管理与模块导入规范
-
-### 依赖安装
-**禁止**使用 `npm` 或 `yarn`，按目录区分安装命令：
-
-| 目录 | 安装命令 | 说明 |
-|------|----------|------|
-| `client/` | `npx expo install <package>` | Expo 会自动选择与 SDK 兼容的版本 |
-| `server/` | `pnpm add <package>` | 使用 pnpm 管理后端依赖 |
+## 常用命令
 
 ```bash
-# client 目录（Expo 项目）
-cd client && npx expo install expo-camera expo-image-picker
-
-# server 目录（Express 项目）
-cd server && pnpm add axios cors
+pnpm dev            # 同时起后端(9091) + Expo
+pnpm validate       # 前后端 TypeScript + ESLint 全量检查
+pnpm lint:client    # 仅 App 端检查
+pnpm lint:server    # 仅后端检查
 ```
 
-**网络问题处理**：`npx expo install` 可能因网络原因失败，失败时重试 2 次，仍失败则改用 `pnpm add` 安装
+## 后端配置（环境变量）
 
-## Expo 开发规范
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `MESSAGE_READ_LIMIT` | `99` | 读满人数上限，达到即消散（验收时可调小，如 `3`） |
+| `MESSAGE_TTL_DAYS` | `30` | 存活天数，到期消散 |
+| `MESSAGE_DAILY_LIMIT` | `3` | 每设备每日发布上限 |
+| `PORT` | `9091` | 后端监听端口 |
 
-### 路径别名
+## API 概览（前缀 `/api/v1`）
 
-Expo 配置了 `@/` 路径别名指向 `client/` 目录：
+| 方法 | 路径 | 说明 |
+|---|---|---|
+| POST | `/users` | 设备注册，返回匿名花名（幂等） |
+| PATCH | `/users/me` | 修改花名（仅一次） |
+| GET | `/users/me` | 我的发布（含已消散全文）+ 我的足迹（已消散仅留记录） |
+| GET | `/messages` | 存活留言列表（仅 id/坐标/时间，总数即列表长度） |
+| GET | `/messages/:id` | 开信读全文；服务端按 device_id 去重计数，读满即消散 |
+| POST | `/messages` | 发布留言；服务端做敏感词校验 + 每日限额 |
+| POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
+| POST | `/upload` | 图片/视频上传（multipart），返回存储 key 与访问 URL |
 
-```tsx
-// 正确
-import { Screen } from '@/components/Screen';
+## 目录结构
 
-// 避免相对路径
-import { Screen } from '../../../components/Screen';
+```
+client/                 # Expo App
+├── app/                # 路由（index=守候主界面, compose=写留言, profile=我的）
+├── screens/            # 页面实现（与路由一一对应）
+├── components/         # 光点/开信动画/贴纸/夜空背景/演示面板等
+├── contexts/           # 全局状态（设备、位置、留言缓存）
+├── utils/              # API 封装、Haversine、贴纸注册表
+server/                 # Mock 后端
+├── src/routes/         # users / messages / upload
+├── src/seeds.ts        # 40 条种子留言
+└── src/store.ts        # 数据存储与消散判定
 ```
 
-## 本地开发
+## 设计文档
 
-`coze-dev dev`：用来首次启动前后端服务，也可以用来重启前后端服务（该命令会先尝试杀掉占用端口的进程，再启动服务）
+视觉基调、配色、动效规范见 [DESIGN.md](./DESIGN.md)。
