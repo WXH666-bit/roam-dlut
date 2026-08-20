@@ -87,6 +87,7 @@ export default function HomeScreen() {
 
   const [moodIndex, setMoodIndex] = useState(0);
   const [encounterId, setEncounterId] = useState<string | null>(null);
+  const [nearbyExtra, setNearbyExtra] = useState(0);
   const [letterId, setLetterId] = useState<string | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
 
@@ -107,22 +108,28 @@ export default function HomeScreen() {
   useEffect(() => {
     if (!location) {
       setEncounterId(null);
+      setNearbyExtra(0);
       return;
     }
     let nearest: string | null = null;
     let nearestDist = Infinity;
+    let inRange = 0;
     for (const m of aliveMessages) {
       if (readIds.has(m.id)) continue;
       const d = haversineMeters(location.lat, location.lng, m.lat, m.lng);
-      if (d <= ENCOUNTER_RADIUS_M && d < nearestDist) {
-        nearest = m.id;
-        nearestDist = d;
+      if (d <= ENCOUNTER_RADIUS_M) {
+        inRange += 1;
+        if (d < nearestDist) {
+          nearest = m.id;
+          nearestDist = d;
+        }
       }
     }
     if (nearest && nearest !== encounterId && Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
     }
     setEncounterId(nearest);
+    setNearbyExtra(nearest ? inRange - 1 : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [location, aliveMessages, readIds]);
 
@@ -178,6 +185,19 @@ export default function HomeScreen() {
           {encounterId ? (
             <Animated.View entering={FadeIn.duration(600)} exiting={FadeOut.duration(400)} style={{ alignItems: 'center' }}>
               <GlowDot onPress={() => setLetterId(encounterId)} />
+              {nearbyExtra > 0 && (
+                <Text
+                  style={{
+                    marginTop: 18,
+                    fontFamily: handwriting,
+                    fontSize: 14,
+                    color: 'rgba(237,231,246,0.6)',
+                    letterSpacing: 2,
+                  }}
+                >
+                  附近还有 {nearbyExtra} 条
+                </Text>
+              )}
             </Animated.View>
           ) : (
             <Animated.View entering={FadeIn.duration(800)} style={{ alignItems: 'center' }}>

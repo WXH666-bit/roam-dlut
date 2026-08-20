@@ -5,12 +5,15 @@
 import type { MessageMediaType } from './messageTypes';
 import { createFormDataFile } from './index';
 
-const BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL;
+// 生产构建把 EXPO_PUBLIC_BACKEND_BASE_URL 指向公网后端；本地开发默认指向 mock 后端
+const BASE = process.env.EXPO_PUBLIC_BACKEND_BASE_URL ?? 'http://localhost:9091';
 
 export interface ApiUser {
   device_id: string;
   flower_name: string;
   renamed: boolean;
+  /** 服务端设置 SERVER_SECRET 时签发；开信/点赞需通过 x-device-token 回传 */
+  token?: string;
 }
 
 export interface AliveMessageBrief {
@@ -122,9 +125,10 @@ export const fetchAliveMessages = async (): Promise<{
  * 接口：GET /api/v1/messages/:id
  * Query：device_id: string（服务端按此去重计数阅读）
  */
-export const openMessage = async (id: string, deviceId: string): Promise<MessageDetail> => {
+export const openMessage = async (id: string, deviceId: string, token?: string | null): Promise<MessageDetail> => {
   const res = await fetch(
-    `${BASE}/api/v1/messages/${encodeURIComponent(id)}?device_id=${encodeURIComponent(deviceId)}`
+    `${BASE}/api/v1/messages/${encodeURIComponent(id)}?device_id=${encodeURIComponent(deviceId)}`,
+    { headers: token ? { 'x-device-token': token } : undefined }
   );
   if (!res.ok) throw await parseError(res);
   return res.json();
@@ -165,10 +169,14 @@ export const publishMessage = async (payload: {
  * 接口：POST /api/v1/messages/:id/like
  * Body：device_id: string（去重幂等，需已解锁）
  */
-export const likeMessage = async (id: string, deviceId: string): Promise<{ likes: number; liked: boolean }> => {
+export const likeMessage = async (
+  id: string,
+  deviceId: string,
+  token?: string | null
+): Promise<{ likes: number; liked: boolean }> => {
   const res = await fetch(`${BASE}/api/v1/messages/${encodeURIComponent(id)}/like`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'x-device-token': token } : {}) },
     body: JSON.stringify({ device_id: deviceId }),
   });
   if (!res.ok) throw await parseError(res);

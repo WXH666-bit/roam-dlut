@@ -16,7 +16,7 @@
 | 端 | 技术 |
 |---|---|
 | App（`client/`） | Expo 54 · React Native · Expo Router · Uniwind(Tailwind v4) · Reanimated |
-| Mock 后端（`server/`） | Express · tsx · 内存数据 + JSON 持久化（替代开发期的团队 MySQL 服务） |
+| 后端（`server/`） | Express · tsx · 数据层可切换（默认内存 + JSON 持久化，设 `DATABASE_URL` 走 MySQL）· 存储层可切换（默认开发态对象存储，设 `STORAGE_PROVIDER=qiniu` 走七牛 Kodo） |
 | 包管理 | pnpm workspace monorepo |
 
 ## 快速开始
@@ -46,8 +46,8 @@ pnpm dev
 3. **连续点击版本号 5 次**，开启演示模式
 4. 屏幕右侧出现虚拟定位面板：
    - 顶部显示当前模拟坐标
-   - **方向按钮**：按步长微调经纬度（步长档位约 11m / 55m / 111m）
-   - **「跳到留言旁」列表**：一键把模拟位置设到某条存活留言的 50m 范围内——立即触发震动 + 光点 + 开信全流程
+   - **方向按钮**：按步长微调经纬度（单档步长 0.00025° ≈ 25–30 米，逐步逼近即可）
+   - **「跳到留言旁」列表**：一键把模拟位置设到某条存活留言的 50m 范围内——走到留言 50 米内即偶遇浮现（震动 + 光点 + 开信全流程）
 5. 面板内可随时**关闭演示模式**，恢复真实 GPS
 
 ## 常用命令
@@ -61,12 +61,70 @@ pnpm lint:server    # 仅后端检查
 
 ## 后端配置（环境变量）
 
+所有开关均可不设——不设时就是本地开发态行为（内存存储 + 开发态对象存储 + 免 token）。
+
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `MESSAGE_READ_LIMIT` | `99` | 读满人数上限，达到即消散（验收时可调小，如 `3`） |
 | `MESSAGE_TTL_DAYS` | `30` | 存活天数，到期消散 |
 | `MESSAGE_DAILY_LIMIT` | `3` | 每设备每日发布上限 |
 | `PORT` | `9091` | 后端监听端口 |
+| `STORAGE_PROVIDER` | 开发态内置存储 | 设为 `qiniu` 时切换为七牛 Kodo（需同时设下方 4 个变量） |
+| `QINIU_S3_ENDPOINT` | — | Kodo 的 S3 兼容端点，如 `s3.cn-east-1.qiniucs.com`（可不带 `https://`） |
+| `QINIU_ACCESS_KEY` | — | 七牛账号 AK |
+| `QINIU_SECRET_KEY` | — | 七牛账号 SK |
+| `QINIU_BUCKET` | — | Kodo 空间名 |
+| `DATABASE_URL` | 内存 + JSON | MySQL 连接串，如 `mysql://user:pass@host:3306/cidi`；设置后数据走 MySQL |
+| `SERVER_SECRET` | 不校验 | 设置后注册接口签发设备 token，开信/点赞须带 `x-device-token` 头（轻量防刷） |
+
+## 部署到七牛云
+
+> 目标形态：后端跑在七牛云服务器（Node.js + MySQL + Kodo），App 构建 Release APK 指向公网后端。
+
+**1. 建库建表**
+
+```bash
+mysql -h <mysql-host> -u <user> -p <database> < server/migrate.sql
+```
+
+`migrate.sql` 只做 `CREATE TABLE IF NOT EXISTS`（users / messages / message_readers / message_likes），重复执行安全；首次启动时后端也会自动建表，并**在空库时自动播种 40 条种子留言**。
+
+**2. 配置环境变量并启动后端**
+
+```bash
+cd server
+pnpm install
+pnpm build   # 产出 dist/
+
+# 必配（七牛三件套 + 数据库 + 防刷密钥）
+export STORAGE_PROVIDER=qiniu
+export QINIU_S3_ENDPOINT=s3.<区域>.qiniucs.com
+export QINIU_ACCESS_KEY=<七牛AK>
+export QINIU_SECRET_KEY=<七牛SK>
+export QINIU_BUCKET=<空间名>
+export DATABASE_URL=mysql://<user>:<pass>@<mysql-host>:3306/<database>
+export SERVER_SECRET=<随机长字符串>   # 如 openssl rand -hex 32
+
+# 可选调参（默认值见上表）
+# export MESSAGE_READ_LIMIT=99 MESSAGE_TTL_DAYS=30 MESSAGE_DAILY_LIMIT=3
+
+PORT=9091 pnpm start
+```
+
+注意：
+- `STORAGE_PROVIDER=qiniu` 下后端完全不加载开发态 SDK，离开本开发环境也能跑
+- 上传链路不变：App 仍 `POST /api/v1/upload`（multipart，单文件 ≤60MB，超限返回 413），由服务端中转写入 Kodo；读取时实时生成 7 天有效的签名 URL
+- `SERVER_SECRET` 一旦上线就不要再改，否则所有已安装设备的 token 立即失效
+
+**3. 构建 App（指向公网后端）**
+
+```bash
+cd client
+EXPO_PUBLIC_BACKEND_BASE_URL=https://<你的后端域名> pnpm exec expo run:android --variant release
+# 或用 EAS：EXPO_PUBLIC_BACKEND_BASE_URL=https://<你的后端域名> eas build -p android
+```
+
+本地开发不用管这一步——`client/.env` 里的 `http://localhost:9091` 就是默认值，代码里也内置了同样的兜底。
 
 ## API 概览（前缀 `/api/v1`）
 
@@ -79,7 +137,9 @@ pnpm lint:server    # 仅后端检查
 | GET | `/messages/:id` | 开信读全文；服务端按 device_id 去重计数，读满即消散 |
 | POST | `/messages` | 发布留言；服务端做敏感词校验 + 每日限额 |
 | POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
-| POST | `/upload` | 图片/视频上传（multipart），返回存储 key 与访问 URL |
+| POST | `/upload` | 图片/视频上传（multipart，≤60MB），返回存储 key 与访问 URL |
+
+> 服务端设了 `SERVER_SECRET` 时：`POST /users` 响应会多一个 `token` 字段，之后开信与点赞须带请求头 `x-device-token: <token>`，否则 401。App 端已自动处理（注册时保存并回传）。
 
 ## 目录结构
 
@@ -90,10 +150,13 @@ client/                 # Expo App
 ├── components/         # 光点/开信动画/贴纸/夜空背景/演示面板等
 ├── contexts/           # 全局状态（设备、位置、留言缓存）
 ├── utils/              # API 封装、Haversine、贴纸注册表
-server/                 # Mock 后端
+server/                 # 后端
 ├── src/routes/         # users / messages / upload
 ├── src/seeds.ts        # 40 条种子留言
-└── src/store.ts        # 数据存储与消散判定
+├── src/store/          # 数据层（index=接口与切换, memoryStore, mysqlStore）
+├── src/storage/        # 存储层（index=接口与切换, cozeProvider, qiniuProvider）
+├── src/auth.ts         # 设备 token 签发与校验（SERVER_SECRET 开关）
+└── migrate.sql         # MySQL 建表脚本（部署七牛时执行）
 ```
 
 ## 设计文档

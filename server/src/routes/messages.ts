@@ -1,9 +1,10 @@
 import { Router } from 'express';
-import { createMessage, ensureUser, findMessage, getMessages, touchMessage } from '../store';
+import { addLike, addReader, createMessage, ensureUser, findMessage, listMessages } from '../store';
 import { isAlive, type Message } from '../types';
 import { config, TTL_MS } from '../config';
 import { hitSensitiveWord } from '../sensitiveWords';
 import { mediaUrlOf } from '../storage';
+import { tokenValid } from '../auth';
 
 const router = Router();
 
@@ -12,18 +13,22 @@ const aliveNow = (m: Message) => isAlive(m, Date.now(), TTL_MS, config.readLimit
 const remaining = (m: Message) => Math.max(0, config.readLimit - m.readers.length);
 
 // 存活留言列表：仅 id / 坐标 / 创建时间，不含内容
-router.get('/', (req, res) => {
-  const list = getMessages()
+router.get('/', async (req, res) => {
+  const all = await listMessages();
+  const list = all
     .filter(aliveNow)
     .map((m) => ({ id: m.id, lat: m.lat, lng: m.lng, created_at: m.createdAt }));
   res.json({ list, total: list.length, read_limit: config.readLimit });
 });
 
-// 开信：读全文；按 device_id 去重计数，读满阈值即消散
+// 开信：读全文；按 device_id 去重计数，读满阈值即消散；SERVER_SECRET 开启时需带 x-device-token
 router.get('/:id', async (req, res) => {
-  const m = findMessage(req.params.id);
-  if (!m) return res.status(404).json({ error: 'not_found' });
   const deviceId = String(req.query.device_id || '');
+  if (!tokenValid(deviceId, req.get('x-device-token'))) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+  const m = await findMessage(req.params.id);
+  if (!m) return res.status(404).json({ error: 'not_found' });
 
   if (!aliveNow(m)) {
     // 已消散：仅作者本人可回看
@@ -42,7 +47,7 @@ router.get('/:id', async (req, res) => {
   // 计数阅读（去重）；作者阅读不占名额
   if (deviceId && deviceId !== m.deviceId && !m.readers.includes(deviceId)) {
     m.readers.push(deviceId);
-    touchMessage();
+    await addReader(m.id, deviceId);
   }
 
   return res.json({
@@ -55,7 +60,7 @@ router.get('/:id', async (req, res) => {
 });
 
 // 发布留言：敏感词校验 + 每日限额
-router.post('/', (req, res) => {
+router.post('/', async (req, res) => {
   const { device_id, text, media_type, media_key, lat, lng } = req.body ?? {};
   if (typeof device_id !== 'string' || !device_id.trim()) {
     return res.status(400).json({ error: 'device_id required' });
@@ -82,15 +87,16 @@ router.post('/', (req, res) => {
   const deviceId = device_id.trim().slice(0, 64);
   const startOfDay = new Date();
   startOfDay.setHours(0, 0, 0, 0);
-  const todayCount = getMessages().filter(
+  const all = await listMessages();
+  const todayCount = all.filter(
     (m) => m.deviceId === deviceId && m.createdAt >= startOfDay.getTime()
   ).length;
   if (todayCount >= config.dailyLimit) {
     return res.status(429).json({ error: `今天已经藏了 ${config.dailyLimit} 条了，明天再来吧` });
   }
 
-  const user = ensureUser(deviceId);
-  const m = createMessage({
+  const user = await ensureUser(deviceId);
+  const m = await createMessage({
     deviceId,
     flowerName: user.flowerName,
     text: text.trim(),
@@ -101,22 +107,25 @@ router.post('/', (req, res) => {
   return res.status(201).json({ id: m.id, created_at: m.createdAt });
 });
 
-// 点赞：去重、幂等；需已解锁（读过）
-router.post('/:id/like', (req, res) => {
-  const m = findMessage(req.params.id);
-  if (!m) return res.status(404).json({ error: 'not_found' });
+// 点赞：去重、幂等；需已解锁（读过）；SERVER_SECRET 开启时需带 x-device-token
+router.post('/:id/like', async (req, res) => {
   const { device_id } = req.body ?? {};
   if (typeof device_id !== 'string' || !device_id.trim()) {
     return res.status(400).json({ error: 'device_id required' });
   }
   const deviceId = device_id.trim();
+  if (!tokenValid(deviceId, req.get('x-device-token'))) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
+  const m = await findMessage(req.params.id);
+  if (!m) return res.status(404).json({ error: 'not_found' });
   if (!aliveNow(m)) return res.status(410).json({ error: 'dissolved' });
   if (deviceId !== m.deviceId && !m.readers.includes(deviceId)) {
     return res.status(403).json({ error: 'unlock_first' });
   }
   if (!m.likes.includes(deviceId)) {
     m.likes.push(deviceId);
-    touchMessage();
+    await addLike(m.id, deviceId);
   }
   return res.json({ likes: m.likes.length, liked: true });
 });

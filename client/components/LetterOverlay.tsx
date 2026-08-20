@@ -40,7 +40,7 @@ const PAPER = '#F6EFDD';
 /** 开信：光点绽放 → 信纸展开 → 花名浮现 → 文字逐行 → 媒体与名额收尾 */
 export function LetterOverlay({ messageId, onClose }: Props) {
   const handwriting = useHandwritingFont();
-  const { deviceId, markRead } = useApp();
+  const { deviceId, deviceToken, markRead } = useApp();
   const [detail, setDetail] = useState<MessageDetail | null>(null);
   const [dissolved, setDissolved] = useState(false);
   const [likes, setLikes] = useState(0);
@@ -64,7 +64,7 @@ export function LetterOverlay({ messageId, onClose }: Props) {
     (async () => {
       if (!deviceId) return;
       try {
-        const d = await openMessage(messageId, deviceId);
+        const d = await openMessage(messageId, deviceId, deviceToken);
         setDetail(d);
         setLikes(d.likes);
         setLiked(d.liked);
@@ -77,7 +77,7 @@ export function LetterOverlay({ messageId, onClose }: Props) {
       }
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messageId, deviceId]);
+  }, [messageId, deviceId, deviceToken]);
 
   const burstStyle = useAnimatedStyle(() => ({
     transform: [{ scale: burstScale.value }],
@@ -90,7 +90,7 @@ export function LetterOverlay({ messageId, onClose }: Props) {
     if (!deviceId || !detail || liked || likeBusy) return;
     setLikeBusy(true);
     try {
-      const r = await likeMessage(detail.id, deviceId);
+      const r = await likeMessage(detail.id, deviceId, deviceToken);
       setLikes(r.likes);
       setLiked(true);
       if (Platform.OS !== 'web') {

@@ -25,6 +25,8 @@ export interface LatLng {
 
 interface AppContextValue {
   deviceId: string | null;
+  /** 服务端开启 SERVER_SECRET 时签发的设备令牌，开信/点赞时随请求回传 */
+  deviceToken: string | null;
   user: ApiUser | null;
   setUser: (u: ApiUser) => void;
   // 定位：demoMode 开启时用 mockLocation，否则用真实 GPS
@@ -46,10 +48,12 @@ interface AppContextValue {
 const AppContext = createContext<AppContextValue | null>(null);
 
 const READ_IDS_KEY = 'cidi:read_ids';
+const DEVICE_TOKEN_KEY = 'cidi:device_token';
 const POLL_INTERVAL = 30_000;
 
 export function AppProvider({ children }: { children: ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
+  const [deviceToken, setDeviceToken] = useState<string | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
   const [gpsLocation, setGpsLocation] = useState<LatLng | null>(null);
   const [locationReady, setLocationReady] = useState(false);
@@ -66,8 +70,18 @@ export function AppProvider({ children }: { children: ReactNode }) {
       const id = await getDeviceId();
       setDeviceId(id);
       try {
+        const savedToken = await AsyncStorage.getItem(DEVICE_TOKEN_KEY);
+        if (savedToken) setDeviceToken(savedToken);
+      } catch {
+        // token 读取失败则等注册重新签发
+      }
+      try {
         const u = await registerDevice(id);
         setUser(u);
+        if (u.token) {
+          setDeviceToken(u.token);
+          AsyncStorage.setItem(DEVICE_TOKEN_KEY, u.token).catch(() => undefined);
+        }
       } catch (e) {
         console.warn('[app] register failed:', e);
       }
@@ -166,6 +180,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const value = useMemo<AppContextValue>(
     () => ({
       deviceId,
+      deviceToken,
       user,
       setUser,
       location,
@@ -181,7 +196,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       markRead,
     }),
     [
-      deviceId, user, location, locationReady, demoMode, mockLocation,
+      deviceId, deviceToken, user, location, locationReady, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, markRead,
     ]
   );
