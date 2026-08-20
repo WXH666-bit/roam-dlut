@@ -141,3 +141,15 @@ dist
 vite.config.js.timestamp-*
 vite.config.ts.timestamp-*
 .vite/
+dist/
+build/
+.expo/
+.expo-shared/
+expo/expo-env.d.ts
+expo-env.d.ts
+.DS_Store
+logs/
+node-compile-cache/
+.codegraph/
+.cozeproj/reduction
+.preview
