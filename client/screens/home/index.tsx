@@ -20,6 +20,7 @@ import { GlowDot } from '@/components/GlowDot';
 import { LetterOverlay } from '@/components/LetterOverlay';
 import { DemoPanel } from '@/components/DemoPanel';
 import { useApp } from '@/contexts/AppContext';
+import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import { haversineMeters } from '@/utils/haversine';
 
@@ -34,6 +35,7 @@ const MOOD_LINES = [
 const ENCOUNTER_RADIUS_M = 50;
 
 function BreathingNumber({ value }: { value: number }) {
+  const handwriting = useHandwritingFont();
   const breath = useSharedValue(0);
   useEffect(() => {
     breath.value = withRepeat(
@@ -53,7 +55,7 @@ function BreathingNumber({ value }: { value: number }) {
     <Animated.Text
       style={[
         {
-          fontFamily: 'NotoSerifSC_300Light',
+          fontFamily: handwriting,
           fontSize: 118,
           color: '#FFE3A3',
           textShadowColor: 'rgba(245,194,107,0.55)',
@@ -71,6 +73,7 @@ function BreathingNumber({ value }: { value: number }) {
 export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useSafeRouter();
+  const handwriting = useHandwritingFont();
   const {
     location,
     locationReady,
@@ -150,7 +153,7 @@ export default function HomeScreen() {
               </TouchableOpacity>
             )}
           </View>
-          <Text style={{ color: 'rgba(237,231,246,0.5)', fontSize: 13, letterSpacing: 4, fontFamily: 'MaShanZheng_400Regular' }}>
+          <Text style={{ color: 'rgba(237,231,246,0.5)', fontSize: 13, letterSpacing: 4, fontFamily: handwriting }}>
             此地有话
           </Text>
           <TouchableOpacity
@@ -180,7 +183,7 @@ export default function HomeScreen() {
             <Animated.View entering={FadeIn.duration(800)} style={{ alignItems: 'center' }}>
               <Text
                 style={{
-                  fontFamily: 'MaShanZheng_400Regular',
+                  fontFamily: handwriting,
                   fontSize: 20,
                   color: 'rgba(237,231,246,0.85)',
                   letterSpacing: 2,
@@ -193,7 +196,7 @@ export default function HomeScreen() {
               </View>
               <Text
                 style={{
-                  fontFamily: 'NotoSerifSC_600SemiBold',
+                  fontFamily: handwriting,
                   fontSize: 16,
                   color: 'rgba(237,231,246,0.75)',
                   letterSpacing: 3,
@@ -206,7 +209,7 @@ export default function HomeScreen() {
                 entering={FadeIn.duration(900)}
                 style={{
                   marginTop: 40,
-                  fontFamily: 'MaShanZheng_400Regular',
+                  fontFamily: handwriting,
                   fontSize: 15,
                   color: 'rgba(142,139,163,0.9)',
                   letterSpacing: 1.5,

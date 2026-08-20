@@ -25,6 +25,7 @@ import dayjs from 'dayjs';
 import { useApp } from '@/contexts/AppContext';
 import { likeMessage, openMessage, type MessageDetail } from '@/utils/api';
 import { RichText } from './RichText';
+import { useHandwritingFont } from '@/contexts/FontContext';
 import { StickerIcon } from './StickerIcon';
 
 interface Props {
@@ -38,6 +39,7 @@ const PAPER = '#F6EFDD';
 
 /** 开信：光点绽放 → 信纸展开 → 花名浮现 → 文字逐行 → 媒体与名额收尾 */
 export function LetterOverlay({ messageId, onClose }: Props) {
+  const handwriting = useHandwritingFont();
   const { deviceId, markRead } = useApp();
   const [detail, setDetail] = useState<MessageDetail | null>(null);
   const [dissolved, setDissolved] = useState(false);
@@ -128,7 +130,7 @@ export function LetterOverlay({ messageId, onClose }: Props) {
         {dissolved && (
           <Animated.View entering={FadeIn.duration(500)} style={{ alignItems: 'center' }}>
             <StickerIcon id="moon" size={44} />
-            <Text style={{ color: '#8E8BA3', fontSize: 15, marginTop: 16, fontFamily: 'MaShanZheng_400Regular', letterSpacing: 1 }}>
+            <Text style={{ color: '#8E8BA3', fontSize: 15, marginTop: 16, fontFamily: handwriting, letterSpacing: 1 }}>
               你来晚了一步，它刚刚消散在风里了
             </Text>
             <TouchableOpacity onPress={onClose} style={{ marginTop: 28, paddingVertical: 10, paddingHorizontal: 28, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(245,194,107,0.35)' }}>
@@ -159,7 +161,7 @@ export function LetterOverlay({ messageId, onClose }: Props) {
             <ScrollView contentContainerStyle={{ padding: 26, paddingBottom: 30 }}>
               {/* 花名浮现 */}
               <Animated.View entering={FadeInUp.delay(650).duration(350)} style={{ alignItems: 'center', marginBottom: 6 }}>
-                <Text style={{ fontFamily: 'MaShanZheng_400Regular', fontSize: 22, color: INK, letterSpacing: 1 }}>
+                <Text style={{ fontFamily: handwriting, fontSize: 22, color: INK, letterSpacing: 1 }}>
                   {detail.flower_name}
                 </Text>
                 <Text style={{ fontSize: 12, color: INK_SOFT, marginTop: 6, letterSpacing: 1 }}>

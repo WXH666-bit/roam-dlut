@@ -21,9 +21,6 @@ importers:
       '@expo-google-fonts/ma-shan-zheng':
         specifier: ^0.4.2
         version: 0.4.2
-      '@expo-google-fonts/noto-serif-sc':
-        specifier: ^0.4.2
-        version: 0.4.2
       '@expo/metro-runtime':
         specifier: ~6.1.2
         version: 6.1.2(expo@54.0.33)(react-dom@19.1.0(react@19.1.0))(react-native@0.81.5(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.1.0))(react@19.1.0)
@@ -1069,9 +1066,6 @@ packages:
 
   '@expo-google-fonts/ma-shan-zheng@0.4.2':
     resolution: {integrity: sha512-pCcOmxTamTpXHjUqx4R8wO3JQ612yuIx+i45Cd2Rzq3pLJY+lhTG/MwhotO3pjS4ba3dc06LL90RxXh2QfB/KA==}
-
-  '@expo-google-fonts/noto-serif-sc@0.4.2':
-    resolution: {integrity: sha512-Bq5UuasyTqEFT2badvu9NqxmrymZp3MhxOGujgzLZOKjXWSM3rnU1+ZOUlH7YKqyrSbjSoEeR9tpd/a1z3/utg==}
 
   '@expo/cli@54.0.23':
     resolution: {integrity: sha512-km0h72SFfQCmVycH/JtPFTVy69w6Lx1cHNDmfLfQqgKFYeeHTjx7LVDP4POHCtNxFP2UeRazrygJhlh4zz498g==}
@@ -7075,8 +7069,6 @@ snapshots:
       levn: 0.4.1
 
   '@expo-google-fonts/ma-shan-zheng@0.4.2': {}
-
-  '@expo-google-fonts/noto-serif-sc@0.4.2': {}
 
   '@expo/cli@54.0.23(expo-router@6.0.23)(expo@54.0.33)(react-native@0.81.5(@babel/core@7.28.6)(@types/react@19.1.17)(react@19.1.0))':
     dependencies:

@@ -17,6 +17,7 @@ import { NightSky } from '@/components/NightSky';
 import { RichText } from '@/components/RichText';
 import { StickerIcon } from '@/components/StickerIcon';
 import { useApp } from '@/contexts/AppContext';
+import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import { publishMessage, uploadMedia } from '@/utils/api';
 import { STICKERS, stickerToken } from '@/utils/stickers';
@@ -35,6 +36,7 @@ interface PickedMedia {
 
 export default function ComposeScreen() {
   const router = useSafeRouter();
+  const handwriting = useHandwritingFont();
   const { deviceId, location, refreshMessages } = useApp();
 
   const [text, setText] = useState('');
@@ -125,7 +127,7 @@ export default function ComposeScreen() {
         <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={{ padding: 6 }}>
           <FontAwesome6 name="arrow-left" size={17} color="#EDE7F6" />
         </TouchableOpacity>
-        <Text style={{ fontFamily: 'MaShanZheng_400Regular', fontSize: 18, color: '#EDE7F6', letterSpacing: 2 }}>
+        <Text style={{ fontFamily: handwriting, fontSize: 18, color: '#EDE7F6', letterSpacing: 2 }}>
           藏一句话
         </Text>
         <View style={{ width: 29 }} />

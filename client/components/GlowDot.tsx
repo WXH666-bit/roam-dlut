@@ -1,4 +1,5 @@
 import React, { useEffect } from 'react';
+import { useHandwritingFont } from '@/contexts/FontContext';
 import { Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
   Easing,
@@ -15,6 +16,7 @@ interface Props {
 
 /** 偶遇光点：暖金色、轻微漂浮、微光呼吸——屏幕上唯一的路标 */
 export function GlowDot({ onPress }: Props) {
+  const handwriting = useHandwritingFont();
   const float = useSharedValue(0);
   const pulse = useSharedValue(0);
 
@@ -81,7 +83,7 @@ export function GlowDot({ onPress }: Props) {
         />
       </Animated.View>
       <View style={{ marginTop: 4 }}>
-        <Text style={{ color: '#F5C26B', fontSize: 13, letterSpacing: 2, fontFamily: 'MaShanZheng_400Regular' }}>
+        <Text style={{ color: '#F5C26B', fontSize: 13, letterSpacing: 2, fontFamily: handwriting }}>
           附近有一条留言
         </Text>
       </View>

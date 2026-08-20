@@ -19,6 +19,7 @@ import { StickerIcon } from '@/components/StickerIcon';
 import { LetterOverlay } from '@/components/LetterOverlay';
 import { RichText } from '@/components/RichText';
 import { useApp } from '@/contexts/AppContext';
+import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import {
   fetchUsersMe,
@@ -30,6 +31,7 @@ import {
 
 export default function ProfileScreen() {
   const router = useSafeRouter();
+  const handwriting = useHandwritingFont();
   const { deviceId, user, setUser, demoMode, setDemoMode } = useApp();
   const [data, setData] = useState<UsersMeResponse | null>(null);
   const [loading, setLoading] = useState(true);
@@ -80,7 +82,7 @@ export default function ProfileScreen() {
         <TouchableOpacity onPress={() => router.back()} hitSlop={12} style={{ padding: 6 }}>
           <FontAwesome6 name="arrow-left" size={17} color="#EDE7F6" />
         </TouchableOpacity>
-        <Text style={{ fontFamily: 'MaShanZheng_400Regular', fontSize: 18, color: '#EDE7F6', letterSpacing: 2 }}>
+        <Text style={{ fontFamily: handwriting, fontSize: 18, color: '#EDE7F6', letterSpacing: 2 }}>
           我的
         </Text>
         <View style={{ width: 29 }} />
@@ -102,7 +104,7 @@ export default function ProfileScreen() {
             }}
           >
             <StickerIcon id="lantern" size={40} />
-            <Text style={{ marginTop: 12, fontFamily: 'MaShanZheng_400Regular', fontSize: 24, color: '#FFE3A3', letterSpacing: 1 }}>
+            <Text style={{ marginTop: 12, fontFamily: handwriting, fontSize: 24, color: '#FFE3A3', letterSpacing: 1 }}>
               {data?.user.flower_name ?? user?.flower_name ?? '……'}
             </Text>
             <Text style={{ marginTop: 6, fontSize: 12, color: '#8E8BA3', letterSpacing: 0.5 }}>
@@ -179,17 +181,19 @@ export default function ProfileScreen() {
 }
 
 function Stat({ label, value }: { label: string; value: number }) {
+  const handwriting = useHandwritingFont();
   return (
     <View style={{ alignItems: 'center' }}>
-      <Text style={{ fontFamily: 'NotoSerifSC_600SemiBold', fontSize: 22, color: '#EDE7F6' }}>{value}</Text>
+      <Text style={{ fontFamily: handwriting, fontSize: 22, color: '#EDE7F6' }}>{value}</Text>
       <Text style={{ marginTop: 2, fontSize: 12, color: '#8E8BA3' }}>{label}</Text>
     </View>
   );
 }
 
 function SectionTitle({ text }: { text: string }) {
+  const handwriting = useHandwritingFont();
   return (
-    <Text style={{ marginTop: 30, marginBottom: 12, fontFamily: 'MaShanZheng_400Regular', fontSize: 16, color: 'rgba(237,231,246,0.85)', letterSpacing: 2 }}>
+    <Text style={{ marginTop: 30, marginBottom: 12, fontFamily: handwriting, fontSize: 16, color: 'rgba(237,231,246,0.85)', letterSpacing: 2 }}>
       {text}
     </Text>
   );
@@ -231,6 +235,7 @@ function MyMessageRow({ item, onPress }: { item: MyMessageItem; onPress: () => v
 }
 
 function FootprintRow({ item, onPress }: { item: FootprintItem; onPress?: () => void }) {
+  const handwriting = useHandwritingFont();
   const inner = (
     <>
       <View style={{ flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -243,7 +248,7 @@ function FootprintRow({ item, onPress }: { item: FootprintItem; onPress?: () => 
           <Text style={{ marginTop: 8, fontSize: 11.5, color: '#8E8BA3' }}>来自「{item.flower_name}」</Text>
         </>
       ) : (
-        <Text style={{ fontSize: 13, color: '#5A5870', fontFamily: 'MaShanZheng_400Regular', letterSpacing: 1 }}>
+        <Text style={{ fontSize: 13, color: '#5A5870', fontFamily: handwriting, letterSpacing: 1 }}>
           它曾经在这里，现在内容已经成了秘密
         </Text>
       )}
@@ -297,6 +302,7 @@ function RenameModal({
   onDone: (u: { device_id: string; flower_name: string; renamed: boolean }) => void;
 }) {
   const { deviceId } = useApp();
+  const handwriting = useHandwritingFont();
   const [name, setName] = useState(current);
   const [busy, setBusy] = useState(false);
 
@@ -323,7 +329,7 @@ function RenameModal({
     <Modal transparent visible animationType="fade" onRequestClose={onClose}>
       <View style={{ flex: 1, backgroundColor: 'rgba(11,14,35,0.9)', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
         <View style={{ width: '100%', maxWidth: 380, borderRadius: 22, backgroundColor: '#1A1C3E', padding: 24, borderWidth: 1, borderColor: 'rgba(245,194,107,0.25)' }}>
-          <Text style={{ fontFamily: 'MaShanZheng_400Regular', fontSize: 18, color: '#FFE3A3', letterSpacing: 1 }}>
+          <Text style={{ fontFamily: handwriting, fontSize: 18, color: '#FFE3A3', letterSpacing: 1 }}>
             想换个什么花名？
           </Text>
           <Text style={{ marginTop: 6, fontSize: 12, color: '#8E8BA3' }}>只能改这一次，想清楚再落笔</Text>

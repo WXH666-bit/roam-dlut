@@ -68,4 +68,5 @@ server/src/
 - `S3Storage` 无 `headObject` 方法；`uploadFile` 返回的 key 不含 folderName 前缀，直接用返回值
 - web 端无 GPS/震动：代码已按 `Platform.OS !== 'web'` 守卫；验证偶遇请用演示模式
 - 种子数据变更后需删除 `server/data/store.json` 并重启后端才会重新播种
-- 改路由 name/文件名后必须跑 `app_check`；字体用 expo-google-fonts（马善政/Noto Serif SC）
+- 改路由 name/文件名后必须跑 `app_check`
+- **字体**：全 App 仅内置 `MaShanZheng_400Regular` 一款（CJK 字体单字重 5–15MB），经 `contexts/FontContext.tsx` 的 `useHandwritingFont()` 异步加载、未就绪回退系统字体；**禁止**在 `_layout` 里阻塞首屏等字体（曾导致预览长时间转圈），也禁止再引入多款大体积 CJK 字体

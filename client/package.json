@@ -16,7 +16,6 @@
   },
   "dependencies": {
     "@expo-google-fonts/ma-shan-zheng": "^0.4.2",
-    "@expo-google-fonts/noto-serif-sc": "^0.4.2",
     "@expo/metro-runtime": "~6.1.2",
     "@expo/vector-icons": "^15.0.3",
     "@gorhom/bottom-sheet": "^5.2.8",
