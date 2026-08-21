@@ -21,6 +21,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#0B0E23"
       },
       "package": "com.roamdlut.cidi",
+      // 明文流量（usesCleartextTraffic）说明：后端当前为 http://<公网IP>:9091 直连，
+      // SDK 54 已移除该 app config 字段的 prebuild 支持，改由 plugins/withCleartextTraffic.js 写入清单；
+      // 决赛前若后端切 https，删除该插件即可。
       "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "VIBRATE"]
     },
     "web": {
@@ -29,6 +32,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       "favicon": "./assets/images/favicon.png"
     },
     "plugins": [
+      "./plugins/withCleartextTraffic",
       process.env.EXPO_PUBLIC_BACKEND_BASE_URL ? [
         "expo-router",
         {

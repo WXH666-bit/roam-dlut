@@ -25,6 +25,9 @@ export default [
       'eslint.config.*',
       'metro.config.*',
       './scripts/**',
+      'plugins/**',       // 排除 Expo config plugins（CommonJS Node 环境）
+      'android/**',       // 排除 prebuild 生成的原生工程
+      'ios/**',
     ],
   },
   regexp.configs["flat/recommended"],

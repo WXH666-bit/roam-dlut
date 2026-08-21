@@ -126,6 +126,27 @@ EXPO_PUBLIC_BACKEND_BASE_URL=https://<你的后端域名> pnpm exec expo run:and
 
 本地开发不用管这一步——`client/.env` 里的 `http://localhost:9091` 就是默认值，代码里也内置了同样的兜底。
 
+## CI 打包（GitHub Actions 自动出 APK）
+
+仓库带 `.github/workflows/android.yml`：push 到 `main` 自动构建，也可在 Actions 页面手动触发（Run workflow），产物是可直接安装的 APK。
+
+**1. 先配置后端地址变量（只配一次）**
+
+仓库 **Settings → Secrets and variables → Actions → Variables → New repository variable**：
+
+- Name：`BACKEND_BASE_URL`
+- Value：后端公网地址，如 `http://<公网IP>:9091`
+
+> 没配这个变量时 workflow 会**立即失败**并提示——这是故意的，防止打出指向 localhost 的废包。该变量在打包时编译期内联进 App，改地址后重新跑一次 workflow 即可。
+
+**2. 取包**
+
+push 或手动触发后，进 **Actions** 页面对应的运行记录，底部 Artifacts 下载 `cidi-apk-r<编号>`，解压即得 APK，直接安装到 Android 手机。
+
+**3. 签名说明**
+
+demo 期 APK 用 Expo 模板自带的 debug keystore 签名（能装能跑，应用商店不收）；决赛发布前再换正式签名（`client/android/app/build.gradle` 配 release signingConfig 或改走 EAS Build）。
+
 ## API 概览（前缀 `/api/v1`）
 
 | 方法 | 路径 | 说明 |

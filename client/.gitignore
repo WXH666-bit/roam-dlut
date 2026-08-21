@@ -4,3 +4,7 @@
 
 expo-env.d.ts
 # @end expo-cli
+
+# expo prebuild 生成的原生工程（CI 现场生成，不进 git）
+/android/
+/ios/
