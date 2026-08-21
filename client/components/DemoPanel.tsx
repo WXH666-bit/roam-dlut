@@ -8,10 +8,12 @@ const STEP = 0.00025; // 约 25-30 米
 
 interface Props {
   onClose: () => void;
+  /** 纯视觉演示消散告别动画，不删真实数据、不调服务端 */
+  onDemoDissolve: () => void;
 }
 
 /** 演示模式 · 虚拟定位面板（调试用朴素样式，不属于产品 UI） */
-export function DemoPanel({ onClose }: Props) {
+export function DemoPanel({ onClose, onDemoDissolve }: Props) {
   const { mockLocation, setMockLocation, setDemoMode, aliveMessages, readIds } = useApp();
 
   // 跳到留言旁列表：按当前虚拟定位距离升序，已读的置灰置底
@@ -107,12 +109,28 @@ export function DemoPanel({ onClose }: Props) {
       </ScrollView>
 
       <TouchableOpacity
+        onPress={onDemoDissolve}
+        style={{
+          marginTop: 12,
+          alignSelf: 'flex-start',
+          paddingVertical: 6,
+          paddingHorizontal: 14,
+          borderRadius: 8,
+          borderWidth: 1,
+          borderColor: 'rgba(245,194,107,0.35)',
+          backgroundColor: 'rgba(245,194,107,0.08)',
+        }}
+      >
+        <Text style={{ color: '#F5C26B', fontSize: 12 }}>演示一次消散</Text>
+      </TouchableOpacity>
+
+      <TouchableOpacity
         onPress={() => {
           setDemoMode(false);
           onClose();
         }}
         style={{
-          marginTop: 12,
+          marginTop: 10,
           alignSelf: 'flex-start',
           paddingVertical: 6,
           paddingHorizontal: 14,

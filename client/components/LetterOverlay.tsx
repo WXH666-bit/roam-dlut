@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Modal,
   Platform,
   Pressable,
   ScrollView,
+  StyleSheet,
   Text,
   TouchableOpacity,
   View,
@@ -24,6 +25,8 @@ import * as Haptics from 'expo-haptics';
 import dayjs from 'dayjs';
 import { useApp } from '@/contexts/AppContext';
 import { likeMessage, openMessage, type MessageDetail } from '@/utils/api';
+import { playDissolve } from '@/utils/sound';
+import { DissolveFx } from './DissolveFx';
 import { RichText } from './RichText';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { StickerIcon } from './StickerIcon';
@@ -40,15 +43,21 @@ const PAPER = '#F6EFDD';
 /** 开信：光点绽放 → 信纸展开 → 花名浮现 → 文字逐行 → 媒体与名额收尾 */
 export function LetterOverlay({ messageId, onClose }: Props) {
   const handwriting = useHandwritingFont();
-  const { deviceId, deviceToken, markRead } = useApp();
+  const { deviceId, deviceToken, markRead, readIds } = useApp();
   const [detail, setDetail] = useState<MessageDetail | null>(null);
   const [dissolved, setDissolved] = useState(false);
   const [likes, setLikes] = useState(0);
   const [liked, setLiked] = useState(false);
   const [likeBusy, setLikeBusy] = useState(false);
+  // 消散告别：idle=正常读信；fx=光点告别中（信纸淡出）；gone=只留告别语
+  const [dissolveStage, setDissolveStage] = useState<'idle' | 'fx' | 'gone'>('idle');
+  const [fxAlive, setFxAlive] = useState(false);
+  // 本次打开是否为首次有效阅读（已读过再打开不重播告别）
+  const firstReadRef = useRef(false);
 
   const burstScale = useSharedValue(0.15);
   const burstOpacity = useSharedValue(0);
+  const cardOpacity = useSharedValue(1);
 
   useEffect(() => {
     // 第一幕：光点绽放
@@ -65,6 +74,7 @@ export function LetterOverlay({ messageId, onClose }: Props) {
       if (!deviceId) return;
       try {
         const d = await openMessage(messageId, deviceId, deviceToken);
+        firstReadRef.current = !readIds.has(messageId);
         setDetail(d);
         setLikes(d.likes);
         setLiked(d.liked);
@@ -84,7 +94,30 @@ export function LetterOverlay({ messageId, onClose }: Props) {
     opacity: burstOpacity.value,
   }));
 
+  const cardFadeStyle = useAnimatedStyle(() => ({
+    opacity: cardOpacity.value,
+  }));
+
   const lines = useMemo(() => (detail ? detail.text.split('\n').filter((l) => l.trim().length > 0) : []), [detail]);
+
+  const textDoneDelay = 900 + lines.length * 150 + 200;
+
+  // 最后名额 + 本机首次阅读：收尾文案停顿 800ms 后播告别动画与音效（仅原生端），信纸淡出后留告别语
+  useEffect(() => {
+    if (!detail || detail.remaining !== 0 || !firstReadRef.current || Platform.OS === 'web') return;
+    const start = textDoneDelay + 200 + 800;
+    const t1 = setTimeout(() => {
+      setDissolveStage('fx');
+      setFxAlive(true);
+      playDissolve();
+      cardOpacity.value = withTiming(0, { duration: 900, easing: Easing.in(Easing.quad) });
+    }, start);
+    const t2 = setTimeout(() => setDissolveStage('gone'), start + 1500);
+    return () => {
+      clearTimeout(t1);
+      clearTimeout(t2);
+    };
+  }, [detail, textDoneDelay, cardOpacity]);
 
   const onLike = async () => {
     if (!deviceId || !detail || liked || likeBusy) return;
@@ -102,8 +135,6 @@ export function LetterOverlay({ messageId, onClose }: Props) {
       setLikeBusy(false);
     }
   };
-
-  const textDoneDelay = 900 + lines.length * 150 + 200;
 
   return (
     <Modal transparent animationType="none" visible onRequestClose={onClose}>
@@ -144,19 +175,22 @@ export function LetterOverlay({ messageId, onClose }: Props) {
         {!dissolved && detail && (
           <Animated.View
             entering={FadeIn.duration(450).delay(300)}
-            style={{
-              width: '100%',
-              maxWidth: 420,
-              maxHeight: '86%',
-              backgroundColor: PAPER,
-              borderRadius: 24,
-              overflow: 'hidden',
-              shadowColor: '#F5C26B',
-              shadowOpacity: 0.25,
-              shadowRadius: 40,
-              shadowOffset: { width: 0, height: 0 },
-              elevation: 12,
-            }}
+            style={[
+              {
+                width: '100%',
+                maxWidth: 420,
+                maxHeight: '86%',
+                backgroundColor: PAPER,
+                borderRadius: 24,
+                overflow: 'hidden',
+                shadowColor: '#F5C26B',
+                shadowOpacity: 0.25,
+                shadowRadius: 40,
+                shadowOffset: { width: 0, height: 0 },
+                elevation: 12,
+              },
+              cardFadeStyle,
+            ]}
           >
             <ScrollView contentContainerStyle={{ padding: 26, paddingBottom: 30 }}>
               {/* 花名浮现 */}
@@ -229,6 +263,21 @@ export function LetterOverlay({ messageId, onClose }: Props) {
                 </TouchableOpacity>
               </Animated.View>
             </ScrollView>
+          </Animated.View>
+        )}
+
+        {/* 消散告别层（不阻塞交互）与告别语 */}
+        {fxAlive && <DissolveFx onDone={() => setFxAlive(false)} />}
+        {dissolveStage === 'gone' && (
+          <Animated.View
+            entering={FadeIn.duration(600)}
+            style={{ ...StyleSheet.absoluteFillObject, alignItems: 'center', justifyContent: 'center' }}
+            pointerEvents="none"
+          >
+            <StickerIcon id="moon" size={40} />
+            <Text style={{ color: '#8E8BA3', fontSize: 15, marginTop: 14, fontFamily: handwriting, letterSpacing: 1 }}>
+              这条留言已随风消散
+            </Text>
           </Animated.View>
         )}
 

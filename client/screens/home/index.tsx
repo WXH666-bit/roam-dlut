@@ -23,6 +23,8 @@ import { useApp } from '@/contexts/AppContext';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import { haversineMeters } from '@/utils/haversine';
+import { playEncounter, playDissolve } from '@/utils/sound';
+import { DissolveFx } from '@/components/DissolveFx';
 
 const MOOD_LINES = [
   '它们藏在路灯下、台阶上、风里',
@@ -82,6 +84,7 @@ export default function HomeScreen() {
     aliveTotal,
     refreshMessages,
     readIds,
+    readLimit,
     user,
     onboarded,
   } = useApp();
@@ -91,6 +94,7 @@ export default function HomeScreen() {
   const [nearbyExtra, setNearbyExtra] = useState(0);
   const [letterId, setLetterId] = useState<string | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
+  const [demoDissolve, setDemoDissolve] = useState(false);
 
   // 页面聚焦时刷新存活列表
   useFocusEffect(
@@ -128,6 +132,7 @@ export default function HomeScreen() {
     }
     if (nearest && nearest !== encounterId && Platform.OS !== 'web') {
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
+      playEncounter();
     }
     setEncounterId(nearest);
     setNearbyExtra(nearest ? inRange - 1 : 0);
@@ -288,7 +293,19 @@ export default function HomeScreen() {
         </View>
       </View>
 
-      {demoMode && panelVisible && <DemoPanel onClose={() => setPanelVisible(false)} />}
+      {demoMode && panelVisible && (
+        <DemoPanel
+          onClose={() => setPanelVisible(false)}
+          onDemoDissolve={() => {
+            setPanelVisible(false);
+            setDemoDissolve(true);
+            if (Platform.OS !== 'web') playDissolve();
+          }}
+        />
+      )}
+      {demoDissolve && (
+        <DissolveFx note={`读满 ${readLimit} 人后，信会这样消散`} onDone={() => setDemoDissolve(false)} />
+      )}
       {letterId && <LetterOverlay messageId={letterId} onClose={() => setLetterId(null)} />}
     </Screen>
   );

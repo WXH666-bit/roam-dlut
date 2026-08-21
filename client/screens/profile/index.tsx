@@ -29,11 +29,16 @@ import {
   type UsersMeResponse,
 } from '@/utils/api';
 
+// 与服务端 config.ts TTL_DAYS 默认值一致；该值接口未下发，服务端改环境变量时需同步这里
+const MESSAGE_TTL_DAYS = 30;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 export default function ProfileScreen() {
   const router = useSafeRouter();
   const handwriting = useHandwritingFont();
   const { deviceId, user, setUser, demoMode, setDemoMode } = useApp();
   const [data, setData] = useState<UsersMeResponse | null>(null);
+  const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [letterId, setLetterId] = useState<string | null>(null);
   const [renameOpen, setRenameOpen] = useState(false);
@@ -46,6 +51,7 @@ export default function ProfileScreen() {
       const d = await fetchUsersMe(deviceId);
       setData(d);
       setUser(d.user);
+      setLoadedAt(Date.now());
     } catch (e) {
       console.warn('[profile] load failed:', e);
     } finally {
@@ -131,7 +137,7 @@ export default function ProfileScreen() {
             <EmptyHint text="还没有藏过留言。第一句最难，也最值得。" />
           )}
           {data?.my_messages.map((m) => (
-            <MyMessageRow key={m.id} item={m} onPress={() => setLetterId(m.id)} />
+            <MyMessageRow key={m.id} item={m} nowTs={loadedAt} onPress={() => setLetterId(m.id)} />
           ))}
 
           {/* 足迹 */}
@@ -205,7 +211,17 @@ function EmptyHint({ text }: { text: string }) {
   );
 }
 
-function MyMessageRow({ item, onPress }: { item: MyMessageItem; onPress: () => void }) {
+function MyMessageRow({ item, nowTs, onPress }: { item: MyMessageItem; nowTs: number | null; onPress: () => void }) {
+  const { readLimit } = useApp();
+  const countdown = (() => {
+    if (!item.alive || nowTs === null) return '';
+    const parts: string[] = [];
+    const readsLeft = readLimit - item.read_count;
+    const daysLeft = Math.round((item.created_at + MESSAGE_TTL_DAYS * DAY_MS - nowTs) / DAY_MS);
+    if (readsLeft > 0) parts.push(`还能被 ${readsLeft} 人读到`);
+    if (daysLeft > 0) parts.push(`还剩 ${daysLeft} 天`);
+    return parts.join(' · ');
+  })();
   return (
     <TouchableOpacity
       onPress={onPress}
@@ -228,6 +244,7 @@ function MyMessageRow({ item, onPress }: { item: MyMessageItem; onPress: () => v
       <View style={{ flexDirection: 'row', marginTop: 10, gap: 16 }}>
         <Text style={{ fontSize: 11.5, color: '#8E8BA3' }}>被 {item.read_count} 人读到</Text>
         <Text style={{ fontSize: 11.5, color: '#8E8BA3' }}>{item.likes} 人喜欢</Text>
+        {countdown !== '' && <Text style={{ fontSize: 11.5, color: '#8E8BA3' }}>{countdown}</Text>}
         {!item.alive && <Text style={{ fontSize: 11.5, color: '#5A5870' }}>仅你能回看</Text>}
       </View>
     </TouchableOpacity>
