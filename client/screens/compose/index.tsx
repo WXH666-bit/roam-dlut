@@ -1,6 +1,9 @@
 import React, { useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
+  Linking,
+  Modal,
   Platform,
   ScrollView,
   Text,
@@ -10,6 +13,7 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
+import { Camera } from 'expo-camera';
 import { FontAwesome6 } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import { Screen } from '@/components/Screen';
@@ -26,6 +30,8 @@ import type { MessageMediaType } from '@/utils/messageTypes';
 const MAX_LEN = 140;
 const INK = '#3E3626';
 const PAPER = '#F6EFDD';
+// 与服务端 multer 上限（server/src/routes/upload.ts）保持一致
+const MEDIA_MAX_BYTES = 120 * 1024 * 1024;
 
 interface PickedMedia {
   uri: string;
@@ -42,6 +48,7 @@ export default function ComposeScreen() {
   const [text, setText] = useState('');
   const [media, setMedia] = useState<PickedMedia | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [chooserKind, setChooserKind] = useState<'image' | 'video' | null>(null);
   const selectionRef = useRef({ start: 0, end: 0 });
   const inputRef = useRef<TextInput>(null);
 
@@ -62,15 +69,14 @@ export default function ComposeScreen() {
     }, 30);
   };
 
-  const pickMedia = async (kind: 'image' | 'video') => {
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: kind === 'image' ? ['images'] : ['videos'],
-      quality: 0.85,
-      videoMaxDuration: 60,
-      allowsMultipleSelection: false,
-    });
-    if (result.canceled || !result.assets?.[0]) return;
-    const asset = result.assets[0];
+  const acceptAsset = (asset: ImagePicker.ImagePickerAsset, kind: 'image' | 'video') => {
+    if (asset.fileSize != null && asset.fileSize > MEDIA_MAX_BYTES) {
+      Toast.show({
+        type: 'info',
+        text1: kind === 'video' ? '视频太大了，试试录短一点' : '这张图片太大了，换一张试试',
+      });
+      return;
+    }
     const mimeType =
       asset.mimeType ?? (kind === 'image' ? 'image/jpeg' : 'video/mp4');
     const ext = asset.uri.split('.').pop()?.split('?')[0] || (kind === 'image' ? 'jpg' : 'mp4');
@@ -80,6 +86,67 @@ export default function ComposeScreen() {
       mimeType,
       fileName: `cidi_${Date.now()}.${ext}`,
     });
+  };
+
+  const pickFromLibrary = async (kind: 'image' | 'video') => {
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: kind === 'image' ? ['images'] : ['videos'],
+      quality: 0.85,
+      videoMaxDuration: 60,
+      allowsMultipleSelection: false,
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    acceptAsset(result.assets[0], kind);
+  };
+
+  const promptPermission = (what: string) => {
+    Alert.alert(
+      `需要${what}权限`,
+      `想把此刻的画面留下来，需要先用一下${what}。`,
+      [
+        { text: '下次吧', style: 'cancel' },
+        { text: '去设置', onPress: () => Linking.openSettings() },
+      ]
+    );
+  };
+
+  const captureNow = async (kind: 'image' | 'video') => {
+    const cam = await ImagePicker.requestCameraPermissionsAsync();
+    if (!cam.granted) {
+      promptPermission('相机');
+      return;
+    }
+    if (kind === 'video') {
+      const mic = await Camera.requestMicrophonePermissionsAsync();
+      if (!mic.granted) {
+        promptPermission('麦克风');
+        return;
+      }
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: kind === 'image' ? ['images'] : ['videos'],
+      quality: 0.85,
+      ...(kind === 'video' ? { videoMaxDuration: 60 } : {}),
+    });
+    if (result.canceled || !result.assets?.[0]) return;
+    acceptAsset(result.assets[0], kind);
+  };
+
+  // 等选择层收起动画结束再调起相机/相册，避免 iOS 上两层视图互相抢占
+  const chooseMediaSource = (action: 'camera' | 'library') => {
+    const kind = chooserKind;
+    setChooserKind(null);
+    if (!kind) return;
+    setTimeout(() => {
+      if (action === 'camera') void captureNow(kind);
+      else void pickFromLibrary(kind);
+    }, 280);
+  };
+
+  const onMediaButton = (kind: 'image' | 'video') => {
+    // web 端没有相机，保持原来的直开相册行为
+    if (Platform.OS === 'web') void pickFromLibrary(kind);
+    else setChooserKind(kind);
   };
 
   const publish = async () => {
@@ -113,7 +180,14 @@ export default function ComposeScreen() {
       Toast.show({ type: 'success', text1: '已藏在此地，等一个路过的人。' });
       router.back();
     } catch (e) {
-      Toast.show({ type: 'error', text1: e instanceof Error ? e.message : '没藏成功，再试一次' });
+      const raw = e instanceof Error ? e.message : '';
+      const msg =
+        raw === 'file_too_large'
+          ? media?.kind === 'video'
+            ? '视频太大了，试试录短一点'
+            : '这张图片太大了，换一张试试'
+          : raw || '没藏成功，再试一次';
+      Toast.show({ type: 'error', text1: msg });
     } finally {
       setPublishing(false);
     }
@@ -204,8 +278,8 @@ export default function ComposeScreen() {
         </Text>
         {!media ? (
           <View style={{ flexDirection: 'row', gap: 12 }}>
-            <MediaButton icon="image" label="一张照片" onPress={() => pickMedia('image')} />
-            <MediaButton icon="video" label="一段视频（≤60秒）" onPress={() => pickMedia('video')} />
+            <MediaButton icon="image" label="一张照片" onPress={() => onMediaButton('image')} />
+            <MediaButton icon="video" label="一段视频（≤60秒）" onPress={() => onMediaButton('video')} />
           </View>
         ) : (
           <View style={{ borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' }}>
@@ -270,7 +344,71 @@ export default function ComposeScreen() {
           </Text>
         )}
       </ScrollView>
+
+      {/* 媒体来源选择层（原生端；web 直开相册不经过这里） */}
+      <Modal
+        visible={chooserKind !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setChooserKind(null)}
+      >
+        <TouchableOpacity
+          activeOpacity={1}
+          onPress={() => setChooserKind(null)}
+          style={{ flex: 1, backgroundColor: 'rgba(5,7,18,0.62)', justifyContent: 'flex-end' }}
+        >
+          <View style={{ padding: 20, paddingBottom: 36 }}>
+            <View
+              style={{
+                backgroundColor: '#1A1C3E',
+                borderRadius: 22,
+                padding: 18,
+                borderWidth: 1,
+                borderColor: 'rgba(255,255,255,0.10)',
+              }}
+            >
+              <Text style={{ fontFamily: handwriting, fontSize: 17, color: '#EDE7F6', textAlign: 'center', marginBottom: 14, letterSpacing: 1 }}>
+                {chooserKind === 'video' ? '这段画面，从哪里来？' : '这张照片，从哪里来？'}
+              </Text>
+              <ChooserOption
+                icon={chooserKind === 'video' ? 'video' : 'camera'}
+                label="现场拍摄"
+                onPress={() => chooseMediaSource('camera')}
+              />
+              <View style={{ height: 10 }} />
+              <ChooserOption
+                icon="images"
+                label="从相册选"
+                onPress={() => chooseMediaSource('library')}
+              />
+            </View>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </Screen>
+  );
+}
+
+function ChooserOption({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      activeOpacity={0.8}
+      style={{
+        height: 50,
+        borderRadius: 14,
+        flexDirection: 'row',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 9,
+        backgroundColor: 'rgba(255,255,255,0.06)',
+        borderWidth: 1,
+        borderColor: 'rgba(255,255,255,0.10)',
+      }}
+    >
+      <FontAwesome6 name={icon} size={15} color="#A79BFA" />
+      <Text style={{ fontSize: 14.5, color: '#EDE7F6', letterSpacing: 1 }}>{label}</Text>
+    </TouchableOpacity>
   );
 }
 

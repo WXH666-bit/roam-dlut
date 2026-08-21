@@ -5,7 +5,7 @@ import { getStorage, mediaUrlOf } from '../storage';
 const router = Router();
 const upload = multer({
   storage: multer.memoryStorage(),
-  limits: { fileSize: 60 * 1024 * 1024 }, // 60MB 上限，防止大视频撑爆内存
+  limits: { fileSize: 120 * 1024 * 1024 }, // 120MB 上限（60s 1080p 实拍视频约 70-90MB），防止大视频撑爆内存
 });
 
 const sanitizeName = (name: string): string =>

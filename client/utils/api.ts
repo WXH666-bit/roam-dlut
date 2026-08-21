@@ -186,7 +186,7 @@ export const likeMessage = async (
 /**
  * 服务端文件：server/src/routes/upload.ts
  * 接口：POST /api/v1/upload
- * Body：multipart FormData，字段 file（图片或视频，≤100MB）
+ * Body：multipart FormData，字段 file（图片或视频，≤120MB）
  */
 export const uploadMedia = async (
   fileUri: string,

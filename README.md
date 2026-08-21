@@ -113,7 +113,7 @@ PORT=9091 pnpm start
 
 注意：
 - `STORAGE_PROVIDER=qiniu` 下后端完全不加载开发态 SDK，离开本开发环境也能跑
-- 上传链路不变：App 仍 `POST /api/v1/upload`（multipart，单文件 ≤60MB，超限返回 413），由服务端中转写入 Kodo；读取时实时生成 7 天有效的签名 URL
+- 上传链路不变：App 仍 `POST /api/v1/upload`（multipart，单文件 ≤120MB，超限返回 413），由服务端中转写入 Kodo；读取时实时生成 7 天有效的签名 URL
 - `SERVER_SECRET` 一旦上线就不要再改，否则所有已安装设备的 token 立即失效
 
 **3. 构建 App（指向公网后端）**
@@ -158,7 +158,7 @@ demo 期 APK 用 Expo 模板自带的 debug keystore 签名（能装能跑，应
 | GET | `/messages/:id` | 开信读全文；服务端按 device_id 去重计数，读满即消散 |
 | POST | `/messages` | 发布留言；服务端做敏感词校验 + 每日限额 |
 | POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
-| POST | `/upload` | 图片/视频上传（multipart，≤60MB），返回存储 key 与访问 URL |
+| POST | `/upload` | 图片/视频上传（multipart，≤120MB），返回存储 key 与访问 URL |
 
 > 服务端设了 `SERVER_SECRET` 时：`POST /users` 响应会多一个 `token` 字段，之后开信与点赞须带请求头 `x-device-token: <token>`，否则 401。App 端已自动处理（注册时保存并回传）。
 
