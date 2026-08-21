@@ -52,6 +52,17 @@ jobs:
         working-directory: client
         run: pnpm exec expo prebuild --platform android --no-install
 
+      - name: 校验明文流量配置已写入 AndroidManifest（withCleartextTraffic 插件生效）
+        run: |
+          MANIFEST=client/android/app/src/main/AndroidManifest.xml
+          if ! grep -q 'android:usesCleartextTraffic="true"' "$MANIFEST"; then
+            echo "::error::$MANIFEST 缺少 android:usesCleartextTraffic=\"true\"，APK 访问 http 后端会被 Android 9+ 明文策略拦截！"
+            echo "::error::原因：client/plugins/withCleartextTraffic.js 未生效（被删除，或未在 app.config.ts 的 plugins 数组注册）。"
+            echo "::error::若后端已切 https，请同步删除该插件与本校验步骤。"
+            exit 1
+          fi
+          echo "OK: $MANIFEST 已包含 usesCleartextTraffic=true"
+
       - name: Gradle assembleRelease（Expo 模板 release 默认 debug keystore 签名，可直接安装）
         working-directory: client/android
         run: ./gradlew assembleRelease --no-daemon
