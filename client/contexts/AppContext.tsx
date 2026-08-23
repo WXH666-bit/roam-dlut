@@ -16,7 +16,7 @@ import {
   type AliveMessageBrief,
   type ApiUser,
 } from '@/utils/api';
-import { getDeviceId } from '@/utils/device';
+import { getDeviceId, overwriteDeviceId } from '@/utils/device';
 
 export interface LatLng {
   lat: number;
@@ -29,6 +29,8 @@ interface AppContextValue {
   deviceToken: string | null;
   user: ApiUser | null;
   setUser: (u: ApiUser) => void;
+  /** 暗号认领成功后切换身份：覆写 deviceId、清 token 与本地已读、重新幂等注册 */
+  adoptIdentity: (u: ApiUser) => Promise<void>;
   // 定位：demoMode 开启时用 mockLocation，否则用真实 GPS
   location: LatLng | null;
   locationReady: boolean;
@@ -158,6 +160,34 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // 暗号认领：本机身份切换为暗号对应的 deviceId；本地已读集合属于旧身份，一并清空
+  const adoptIdentity = useCallback(
+    async (claimed: ApiUser) => {
+      await overwriteDeviceId(claimed.device_id);
+      setDeviceId(claimed.device_id);
+      setUser(claimed);
+      setDeviceToken(null);
+      setReadIds(new Set());
+      try {
+        await AsyncStorage.multiRemove([DEVICE_TOKEN_KEY, READ_IDS_KEY]);
+      } catch {
+        // 清理失败不阻塞身份切换
+      }
+      try {
+        const fresh = await registerDevice(claimed.device_id);
+        setUser(fresh);
+        if (fresh.token) {
+          setDeviceToken(fresh.token);
+          AsyncStorage.setItem(DEVICE_TOKEN_KEY, fresh.token).catch(() => undefined);
+        }
+      } catch (e) {
+        console.warn('[app] re-register after reclaim failed:', e);
+      }
+      await refreshMessages();
+    },
+    [refreshMessages]
+  );
+
   // 存活留言轮询（首拍异步触发，避免在 effect 内同步 setState）
   useEffect(() => {
     const first = setTimeout(refreshMessages, 0);
@@ -207,6 +237,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       deviceToken,
       user,
       setUser,
+      adoptIdentity,
       location,
       locationReady,
       demoMode,
@@ -223,7 +254,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       readLimit,
     }),
     [
-      deviceId, deviceToken, user, location, locationReady, demoMode, mockLocation,
+      deviceId, deviceToken, user, adoptIdentity, location, locationReady, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, markRead,
       onboarded, completeOnboarding, readLimit,
     ]

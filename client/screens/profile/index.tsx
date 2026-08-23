@@ -23,7 +23,9 @@ import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import {
   fetchUsersMe,
+  reclaimIdentity,
   renameFlowerName,
+  type ApiUser,
   type FootprintItem,
   type MyMessageItem,
   type UsersMeResponse,
@@ -44,13 +46,15 @@ export default function ProfileScreen() {
   // 从「我藏下的」打开的回看带分享入口；足迹打开的不带
   const [letterShare, setLetterShare] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
+  const [identityOpen, setIdentityOpen] = useState(false);
   const [versionTaps, setVersionTaps] = useState(0);
   const versionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async () => {
-    if (!deviceId) return;
+  const load = useCallback(async (idOverride?: string) => {
+    const id = idOverride ?? deviceId;
+    if (!id) return;
     try {
-      const d = await fetchUsersMe(deviceId);
+      const d = await fetchUsersMe(id);
       setData(d);
       setUser(d.user);
       setLoadedAt(Date.now());
@@ -131,6 +135,14 @@ export default function ProfileScreen() {
               <View style={{ width: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
               <Stat label="我解锁的" value={data?.footprints.length ?? 0} />
             </View>
+            <TouchableOpacity
+              onPress={() => setIdentityOpen(true)}
+              hitSlop={8}
+              style={{ marginTop: 18, flexDirection: 'row', alignItems: 'center', gap: 6, paddingVertical: 4, paddingHorizontal: 10 }}
+            >
+              <FontAwesome6 name="key" size={10} color="rgba(142,139,163,0.75)" />
+              <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.75)', letterSpacing: 1 }}>身份与找回</Text>
+            </TouchableOpacity>
           </View>
 
           {/* 我发布的 */}
@@ -180,6 +192,16 @@ export default function ProfileScreen() {
             setUser(u);
             setData((prev) => (prev ? { ...prev, user: u } : prev));
             setRenameOpen(false);
+          }}
+        />
+      )}
+      {identityOpen && (
+        <IdentityModal
+          recoveryCode={data?.user.recovery_code ?? user?.recovery_code ?? ''}
+          onClose={() => setIdentityOpen(false)}
+          onSwitched={(u) => {
+            setLoading(true);
+            load(u.device_id);
           }}
         />
       )}
@@ -393,6 +415,132 @@ function RenameModal({
               <Text style={{ color: '#0B0E23', fontSize: 14, fontWeight: '700' }}>{busy ? '落笔中…' : '就它了'}</Text>
             </TouchableOpacity>
           </View>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
+function IdentityModal({
+  recoveryCode,
+  onClose,
+  onSwitched,
+}: {
+  recoveryCode: string;
+  onClose: () => void;
+  onSwitched: (u: ApiUser) => void;
+}) {
+  const { adoptIdentity } = useApp();
+  const handwriting = useHandwritingFont();
+  const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  // 认领成功待确认切换的身份
+  const [pending, setPending] = useState<ApiUser | null>(null);
+
+  const reclaim = async () => {
+    const trimmed = code.trim();
+    if (!trimmed || busy) return;
+    setBusy(true);
+    try {
+      setPending(await reclaimIdentity(trimmed));
+    } catch (e) {
+      Toast.show({ type: 'error', text1: e instanceof Error ? e.message : '认领失败，再试试' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const confirmSwitch = async () => {
+    if (!pending || busy) return;
+    setBusy(true);
+    try {
+      await adoptIdentity(pending);
+      Toast.show({ type: 'success', text1: `欢迎回来，${pending.flower_name}` });
+      onSwitched(pending);
+      onClose();
+    } catch {
+      Toast.show({ type: 'error', text1: '切换失败，再试一次' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal transparent visible animationType="fade" onRequestClose={onClose}>
+      <View style={{ flex: 1, backgroundColor: 'rgba(11,14,35,0.9)', alignItems: 'center', justifyContent: 'center', padding: 28 }}>
+        <View style={{ width: '100%', maxWidth: 380, borderRadius: 22, backgroundColor: '#1A1C3E', padding: 24, borderWidth: 1, borderColor: 'rgba(245,194,107,0.25)' }}>
+          {pending ? (
+            <>
+              <Text style={{ fontFamily: handwriting, fontSize: 18, color: '#FFE3A3', letterSpacing: 1 }}>
+                暗号对上了
+              </Text>
+              <Text style={{ marginTop: 16, fontSize: 15, lineHeight: 25, color: '#EDE7F6' }}>
+                将切换为「{pending.flower_name}」
+              </Text>
+              <Text style={{ marginTop: 8, fontSize: 12, lineHeight: 19, color: '#8E8BA3' }}>
+                这台设备当前的身份会退出，花名、留言和足迹都跟暗号走。
+              </Text>
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 22, gap: 12 }}>
+                <TouchableOpacity onPress={() => setPending(null)} style={{ paddingVertical: 10, paddingHorizontal: 20 }}>
+                  <Text style={{ color: '#8E8BA3', fontSize: 14 }}>再想想</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={confirmSwitch}
+                  disabled={busy}
+                  style={{ paddingVertical: 10, paddingHorizontal: 24, borderRadius: 999, backgroundColor: '#F5C26B' }}
+                >
+                  <Text style={{ color: '#0B0E23', fontSize: 14, fontWeight: '700' }}>{busy ? '切换中…' : '确认切换'}</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          ) : (
+            <>
+              <Text style={{ fontFamily: handwriting, fontSize: 18, color: '#FFE3A3', letterSpacing: 1 }}>
+                你的暗号
+              </Text>
+              <Text style={{ marginTop: 16, fontFamily: handwriting, fontSize: 24, lineHeight: 34, color: '#F5C26B', letterSpacing: 2, textAlign: 'center' }}>
+                {recoveryCode || '……'}
+              </Text>
+              <Text style={{ marginTop: 12, fontSize: 12, lineHeight: 19, color: '#8E8BA3', textAlign: 'center' }}>
+                抄在本子上。凭暗号可以在任何设备找回你的花名
+              </Text>
+              <View style={{ marginVertical: 20, height: 1, backgroundColor: 'rgba(255,255,255,0.08)' }} />
+              <Text style={{ fontSize: 12.5, color: 'rgba(142,139,163,0.9)', letterSpacing: 1 }}>
+                凭暗号找回花名
+              </Text>
+              <TextInput
+                value={code}
+                onChangeText={setCode}
+                placeholder="银杏·晚风·天台·07"
+                placeholderTextColor="rgba(142,139,163,0.5)"
+                autoCapitalize="none"
+                style={{
+                  marginTop: 10,
+                  borderRadius: 12,
+                  paddingHorizontal: 14,
+                  paddingVertical: 12,
+                  fontSize: 16,
+                  color: '#EDE7F6',
+                  backgroundColor: 'rgba(255,255,255,0.06)',
+                  borderWidth: 1,
+                  borderColor: 'rgba(255,255,255,0.12)',
+                  ...(Platform.OS === 'web' ? { outlineStyle: 'none' } as never : {}),
+                }}
+              />
+              <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 20, gap: 12 }}>
+                <TouchableOpacity onPress={onClose} style={{ paddingVertical: 10, paddingHorizontal: 20 }}>
+                  <Text style={{ color: '#8E8BA3', fontSize: 14 }}>收起</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  onPress={reclaim}
+                  disabled={busy}
+                  style={{ paddingVertical: 10, paddingHorizontal: 24, borderRadius: 999, borderWidth: 1, borderColor: 'rgba(245,194,107,0.45)' }}
+                >
+                  <Text style={{ color: '#F5C26B', fontSize: 14 }}>{busy ? '对暗号中…' : '找回'}</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
         </View>
       </View>
     </Modal>

@@ -19,6 +19,8 @@ export interface User {
   flowerName: string;
   renamed: boolean;
   createdAt: number;
+  // 三词暗号（身份找回唯一凭据，明文存储）；老用户由 ensureUser 惰性补发
+  recoveryCode?: string;
 }
 
 export interface StoreShape {

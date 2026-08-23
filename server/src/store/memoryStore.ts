@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import type { Message, StoreShape, User } from '../types';
 import { buildSeedMessages } from '../seeds';
 import { randomFlowerName } from '../flowerNames';
+import { randomRecoveryCode } from '../recoveryWords';
 import type { DataStore } from './index';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
@@ -62,11 +63,34 @@ export class MemoryStore implements DataStore {
     return this.state.users.find((u) => u.deviceId === deviceId);
   }
 
+  async findUserByRecoveryCode(code: string): Promise<User | undefined> {
+    return this.state.users.find((u) => u.recoveryCode === code);
+  }
+
+  // 生成不与存量用户冲突的暗号
+  private freshRecoveryCode(): string {
+    let code = randomRecoveryCode();
+    while (this.state.users.some((u) => u.recoveryCode === code)) {
+      code = randomRecoveryCode();
+    }
+    return code;
+  }
+
   async ensureUser(deviceId: string): Promise<User> {
     let u = this.state.users.find((x) => x.deviceId === deviceId);
     if (!u) {
-      u = { deviceId, flowerName: randomFlowerName(), renamed: false, createdAt: Date.now() };
+      u = {
+        deviceId,
+        flowerName: randomFlowerName(),
+        renamed: false,
+        createdAt: Date.now(),
+        recoveryCode: this.freshRecoveryCode(),
+      };
       this.state.users.push(u);
+      this.persist();
+    } else if (!u.recoveryCode) {
+      // 老用户惰性补发暗号
+      u.recoveryCode = this.freshRecoveryCode();
       this.persist();
     }
     return u;

@@ -12,6 +12,7 @@ export interface DataStore {
   listMessages(): Promise<Message[]>;
   findMessage(id: string): Promise<Message | undefined>;
   findUser(deviceId: string): Promise<User | undefined>;
+  findUserByRecoveryCode(code: string): Promise<User | undefined>;
   ensureUser(deviceId: string): Promise<User>;
   renameUser(deviceId: string, flowerName: string): Promise<User | null>;
   createMessage(
@@ -39,6 +40,7 @@ const need = (): DataStore => {
 export const listMessages = () => need().listMessages();
 export const findMessage = (id: string) => need().findMessage(id);
 export const findUser = (deviceId: string) => need().findUser(deviceId);
+export const findUserByRecoveryCode = (code: string) => need().findUserByRecoveryCode(code);
 export const ensureUser = (deviceId: string) => need().ensureUser(deviceId);
 export const renameUser = (deviceId: string, flowerName: string) =>
   need().renameUser(deviceId, flowerName);

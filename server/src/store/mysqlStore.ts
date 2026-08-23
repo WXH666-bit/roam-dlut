@@ -3,6 +3,7 @@ import crypto from 'node:crypto';
 import type { Message, MediaType, User } from '../types';
 import { buildSeedMessages } from '../seeds';
 import { randomFlowerName } from '../flowerNames';
+import { randomRecoveryCode } from '../recoveryWords';
 import type { DataStore } from './index';
 
 interface MessageRow {
@@ -31,8 +32,17 @@ export class MysqlStore implements DataStore {
       device_id VARCHAR(64) PRIMARY KEY,
       flower_name VARCHAR(32) NOT NULL,
       renamed TINYINT(1) NOT NULL DEFAULT 0,
-      created_at BIGINT NOT NULL
+      created_at BIGINT NOT NULL,
+      recovery_code VARCHAR(64) NULL
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    // 存量表补列（CREATE TABLE IF NOT EXISTS 不会变更已有表）
+    const [col] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT COUNT(*) AS n FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' AND COLUMN_NAME = 'recovery_code'`
+    );
+    if (Number(col[0]?.n ?? 0) === 0) {
+      await this.pool.query('ALTER TABLE users ADD COLUMN recovery_code VARCHAR(64) NULL');
+    }
     await this.pool.query(`CREATE TABLE IF NOT EXISTS messages (
       id VARCHAR(32) PRIMARY KEY,
       device_id VARCHAR(64) NOT NULL,
@@ -131,27 +141,62 @@ export class MysqlStore implements DataStore {
     return list[0];
   }
 
-  async findUser(deviceId: string): Promise<User | undefined> {
-    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
-      'SELECT * FROM users WHERE device_id = ?', [deviceId]
-    );
-    const r = rows[0];
-    if (!r) return undefined;
+  private mapUser(r: mysql.RowDataPacket): User {
     return {
       deviceId: r.device_id,
       flowerName: r.flower_name,
       renamed: Boolean(r.renamed),
       createdAt: Number(r.created_at),
+      recoveryCode: r.recovery_code ?? undefined,
     };
+  }
+
+  async findUser(deviceId: string): Promise<User | undefined> {
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      'SELECT * FROM users WHERE device_id = ?', [deviceId]
+    );
+    return rows[0] ? this.mapUser(rows[0]) : undefined;
+  }
+
+  async findUserByRecoveryCode(code: string): Promise<User | undefined> {
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      'SELECT * FROM users WHERE recovery_code = ? LIMIT 1', [code]
+    );
+    return rows[0] ? this.mapUser(rows[0]) : undefined;
+  }
+
+  // 生成不与存量用户冲突的暗号
+  private async freshRecoveryCode(): Promise<string> {
+    let code = randomRecoveryCode();
+    while (await this.findUserByRecoveryCode(code)) {
+      code = randomRecoveryCode();
+    }
+    return code;
   }
 
   async ensureUser(deviceId: string): Promise<User> {
     const existing = await this.findUser(deviceId);
-    if (existing) return existing;
-    const u: User = { deviceId, flowerName: randomFlowerName(), renamed: false, createdAt: Date.now() };
+    if (existing) {
+      if (!existing.recoveryCode) {
+        // 老用户惰性补发暗号
+        existing.recoveryCode = await this.freshRecoveryCode();
+        await this.pool.query(
+          'UPDATE users SET recovery_code = ? WHERE device_id = ?',
+          [existing.recoveryCode, deviceId]
+        );
+      }
+      return existing;
+    }
+    const u: User = {
+      deviceId,
+      flowerName: randomFlowerName(),
+      renamed: false,
+      createdAt: Date.now(),
+      recoveryCode: await this.freshRecoveryCode(),
+    };
     await this.pool.query(
-      'INSERT IGNORE INTO users (device_id, flower_name, renamed, created_at) VALUES (?,?,?,?)',
-      [u.deviceId, u.flowerName, 0, u.createdAt]
+      'INSERT IGNORE INTO users (device_id, flower_name, renamed, created_at, recovery_code) VALUES (?,?,?,?,?)',
+      [u.deviceId, u.flowerName, 0, u.createdAt, u.recoveryCode]
     );
     return (await this.findUser(deviceId)) ?? u;
   }

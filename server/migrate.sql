@@ -5,8 +5,11 @@ CREATE TABLE IF NOT EXISTS users (
   device_id VARCHAR(64) PRIMARY KEY,
   flower_name VARCHAR(32) NOT NULL,
   renamed TINYINT(1) NOT NULL DEFAULT 0,
-  created_at BIGINT NOT NULL
+  created_at BIGINT NOT NULL,
+  recovery_code VARCHAR(64) NULL COMMENT '三词暗号（身份找回唯一凭据，明文）'
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 存量库升级：ALTER TABLE users ADD COLUMN recovery_code VARCHAR(64) NULL;
 
 CREATE TABLE IF NOT EXISTS messages (
   id VARCHAR(32) PRIMARY KEY,

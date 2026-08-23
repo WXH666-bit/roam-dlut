@@ -1,15 +1,16 @@
 import { Router } from 'express';
-import { ensureUser, listMessages, renameUser } from '../store';
+import { ensureUser, findUserByRecoveryCode, listMessages, renameUser } from '../store';
 import { isAlive } from '../types';
 import { config, TTL_MS } from '../config';
 import { issueToken } from '../auth';
 
 const router = Router();
 
-const publicUser = (u: { deviceId: string; flowerName: string; renamed: boolean }) => ({
+const publicUser = (u: { deviceId: string; flowerName: string; renamed: boolean; recoveryCode?: string }) => ({
   device_id: u.deviceId,
   flower_name: u.flowerName,
   renamed: u.renamed,
+  ...(u.recoveryCode ? { recovery_code: u.recoveryCode } : {}),
 });
 
 // 设备注册：首次分配花名，幂等；SERVER_SECRET 开启时签发防刷 token
@@ -39,6 +40,35 @@ router.patch('/me', async (req, res) => {
     return res.status(409).json({ error: '花名只能修改一次' });
   }
   return res.json(publicUser(u));
+});
+
+// 暗号认领限流：内存滑动窗口，每 IP 每小时最多 10 次失败（成功不计、不持久化）
+const reclaimFails = new Map<string, { count: number; windowStart: number }>();
+const RECLAIM_WINDOW_MS = 60 * 60 * 1000;
+const RECLAIM_MAX_FAILS = 10;
+
+// 凭暗号找回身份：命中返回花名与 device_id（有 SERVER_SECRET 时照常签发 token）
+router.post('/reclaim', async (req, res) => {
+  const ip = req.ip || 'unknown';
+  const now = Date.now();
+  const rec = reclaimFails.get(ip);
+  if (rec && now - rec.windowStart < RECLAIM_WINDOW_MS && rec.count >= RECLAIM_MAX_FAILS) {
+    return res.status(429).json({ error: '试太多次了，喝口水想想再来' });
+  }
+  const { code } = req.body ?? {};
+  const trimmed = typeof code === 'string' ? code.trim() : '';
+  const u = trimmed ? await findUserByRecoveryCode(trimmed) : undefined;
+  if (!u) {
+    if (!rec || now - rec.windowStart >= RECLAIM_WINDOW_MS) {
+      reclaimFails.set(ip, { count: 1, windowStart: now });
+    } else {
+      rec.count += 1;
+    }
+    return res.status(404).json({ error: '暗号不对，再核对一下' });
+  }
+  reclaimFails.delete(ip);
+  const token = issueToken(u.deviceId);
+  return res.json({ ...publicUser(u), ...(token ? { token } : {}) });
 });
 
 // 我的发布（含已消散全文）+ 我的足迹（已消散仅留记录）

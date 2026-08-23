@@ -26,3 +26,13 @@ export const getDeviceId = async (): Promise<string> => {
   }
   return id;
 };
+
+/** 暗号认领后覆写设备身份：更新持久化与内存缓存 */
+export const overwriteDeviceId = async (id: string): Promise<void> => {
+  cached = id;
+  try {
+    await AsyncStorage.setItem(DEVICE_ID_KEY, id);
+  } catch {
+    // 持久化失败不阻塞，本次会话内仍可用
+  }
+};

@@ -14,6 +14,8 @@ export interface ApiUser {
   renamed: boolean;
   /** 服务端设置 SERVER_SECRET 时签发；开信/点赞需通过 x-device-token 回传 */
   token?: string;
+  /** 三词暗号（身份找回凭据），注册时生成，老用户惰性补发 */
+  recovery_code?: string;
 }
 
 export interface AliveMessageBrief {
@@ -100,6 +102,21 @@ export const renameFlowerName = async (deviceId: string, flowerName: string): Pr
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ device_id: deviceId, flower_name: flowerName }),
+  });
+  if (!res.ok) throw await parseError(res);
+  return res.json();
+};
+
+/**
+ * 服务端文件：server/src/routes/users.ts
+ * 接口：POST /api/v1/users/reclaim
+ * Body：code: string（三词暗号，精确匹配；404=暗号不对，429=失败次数超限）
+ */
+export const reclaimIdentity = async (code: string): Promise<ApiUser> => {
+  const res = await fetch(`${BASE}/api/v1/users/reclaim`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ code }),
   });
   if (!res.ok) throw await parseError(res);
   return res.json();
