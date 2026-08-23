@@ -289,8 +289,8 @@ export function LetterOverlay({ messageId, onClose, shareEntry }: Props) {
           <Text style={{ color: 'rgba(237,231,246,0.6)', fontSize: 15 }}>收起</Text>
         </Pressable>
 
-        {/* 分享藏话卡（仅我的发布回看；消散告别中不显示） */}
-        {shareEntry && detail && dissolveStage === 'idle' && (
+        {/* 分享藏话卡（仅我的发布回看；已消散或消散告别中不显示） */}
+        {shareEntry && detail && !detail.dissolved && dissolveStage === 'idle' && (
           <ShareSecretEntry
             variant="icon"
             flowerName={detail.flower_name}
