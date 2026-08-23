@@ -28,12 +28,15 @@ import { likeMessage, openMessage, type MessageDetail } from '@/utils/api';
 import { playDissolve } from '@/utils/sound';
 import { DissolveFx } from './DissolveFx';
 import { RichText } from './RichText';
+import { ShareSecretEntry } from './ShareSecretEntry';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { StickerIcon } from './StickerIcon';
 
 interface Props {
   messageId: string;
   onClose: () => void;
+  // 我的发布回看时传入：左上角显示「分享这个秘密」图标
+  shareEntry?: boolean;
 }
 
 const INK = '#3E3626';
@@ -41,7 +44,7 @@ const INK_SOFT = '#6B5F45';
 const PAPER = '#F6EFDD';
 
 /** 开信：光点绽放 → 信纸展开 → 花名浮现 → 文字逐行 → 媒体与名额收尾 */
-export function LetterOverlay({ messageId, onClose }: Props) {
+export function LetterOverlay({ messageId, onClose, shareEntry }: Props) {
   const handwriting = useHandwritingFont();
   const { deviceId, deviceToken, markRead, readIds } = useApp();
   const [detail, setDetail] = useState<MessageDetail | null>(null);
@@ -285,6 +288,16 @@ export function LetterOverlay({ messageId, onClose }: Props) {
         <Pressable onPress={onClose} style={{ position: 'absolute', top: 56, right: 28, padding: 8 }}>
           <Text style={{ color: 'rgba(237,231,246,0.6)', fontSize: 15 }}>收起</Text>
         </Pressable>
+
+        {/* 分享藏话卡（仅我的发布回看；消散告别中不显示） */}
+        {shareEntry && detail && dissolveStage === 'idle' && (
+          <ShareSecretEntry
+            variant="icon"
+            flowerName={detail.flower_name}
+            dateText={dayjs(detail.created_at).format('YYYY年M月D日')}
+            style={{ position: 'absolute', top: 56, left: 28 }}
+          />
+        )}
       </View>
     </Modal>
   );

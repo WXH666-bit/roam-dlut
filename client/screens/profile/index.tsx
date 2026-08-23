@@ -41,6 +41,8 @@ export default function ProfileScreen() {
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
   const [letterId, setLetterId] = useState<string | null>(null);
+  // 从「我藏下的」打开的回看带分享入口；足迹打开的不带
+  const [letterShare, setLetterShare] = useState(false);
   const [renameOpen, setRenameOpen] = useState(false);
   const [versionTaps, setVersionTaps] = useState(0);
   const versionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -137,7 +139,7 @@ export default function ProfileScreen() {
             <EmptyHint text="还没有藏过留言。第一句最难，也最值得。" />
           )}
           {data?.my_messages.map((m) => (
-            <MyMessageRow key={m.id} item={m} nowTs={loadedAt} onPress={() => setLetterId(m.id)} />
+            <MyMessageRow key={m.id} item={m} nowTs={loadedAt} onPress={() => { setLetterId(m.id); setLetterShare(true); }} />
           ))}
 
           {/* 足迹 */}
@@ -181,7 +183,16 @@ export default function ProfileScreen() {
           }}
         />
       )}
-      {letterId && <LetterOverlay messageId={letterId} onClose={() => setLetterId(null)} />}
+      {letterId && (
+        <LetterOverlay
+          messageId={letterId}
+          shareEntry={letterShare}
+          onClose={() => {
+            setLetterId(null);
+            setLetterShare(false);
+          }}
+        />
+      )}
     </Screen>
   );
 }

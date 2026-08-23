@@ -16,8 +16,10 @@ import * as ImagePicker from 'expo-image-picker';
 import { Camera } from 'expo-camera';
 import { FontAwesome6 } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
+import dayjs from 'dayjs';
 import { Screen } from '@/components/Screen';
 import { NightSky } from '@/components/NightSky';
+import { ShareSecretEntry } from '@/components/ShareSecretEntry';
 import { RichText } from '@/components/RichText';
 import { StickerIcon } from '@/components/StickerIcon';
 import { useApp } from '@/contexts/AppContext';
@@ -43,11 +45,12 @@ interface PickedMedia {
 export default function ComposeScreen() {
   const router = useSafeRouter();
   const handwriting = useHandwritingFont();
-  const { deviceId, location, refreshMessages } = useApp();
+  const { deviceId, location, refreshMessages, user } = useApp();
 
   const [text, setText] = useState('');
   const [media, setMedia] = useState<PickedMedia | null>(null);
   const [publishing, setPublishing] = useState(false);
+  const [published, setPublished] = useState(false);
   const [chooserKind, setChooserKind] = useState<'image' | 'video' | null>(null);
   const selectionRef = useRef({ start: 0, end: 0 });
   const inputRef = useRef<TextInput>(null);
@@ -178,7 +181,7 @@ export default function ComposeScreen() {
       });
       await refreshMessages();
       Toast.show({ type: 'success', text1: '已藏在此地，等一个路过的人。' });
-      router.back();
+      setPublished(true);
     } catch (e) {
       const raw = e instanceof Error ? e.message : '';
       const msg =
@@ -192,6 +195,32 @@ export default function ComposeScreen() {
       setPublishing(false);
     }
   };
+
+  if (published) {
+    return (
+      <Screen backgroundColor="#0B0E23">
+        <NightSky />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+          <StickerIcon id="envelope" size={50} />
+          <Text style={{ marginTop: 26, fontFamily: handwriting, fontSize: 20, color: '#FFE3A3', letterSpacing: 1.5, textAlign: 'center' }}>
+            已藏在此地，等一个路过的人。
+          </Text>
+          <Text style={{ marginTop: 14, fontSize: 13, color: 'rgba(237,231,246,0.6)', letterSpacing: 1 }}>
+            路过的人走近 50 米，就会遇见它
+          </Text>
+          <ShareSecretEntry
+            variant="button"
+            flowerName={user?.flower_name ?? '一位同学'}
+            dateText={dayjs().format('YYYY年M月D日')}
+            style={{ marginTop: 34 }}
+          />
+          <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={{ marginTop: 26, padding: 8 }}>
+            <Text style={{ fontSize: 13.5, color: '#8E8BA3' }}>好了，回去</Text>
+          </TouchableOpacity>
+        </View>
+      </Screen>
+    );
+  }
 
   return (
     <Screen backgroundColor="#0B0E23">
