@@ -45,7 +45,7 @@ interface PickedMedia {
 export default function ComposeScreen() {
   const router = useSafeRouter();
   const handwriting = useHandwritingFont();
-  const { deviceId, location, refreshMessages, user } = useApp();
+  const { deviceId, location, locationStatus, retryLocation, demoMode, refreshMessages, user } = useApp();
 
   const [text, setText] = useState('');
   const [media, setMedia] = useState<PickedMedia | null>(null);
@@ -367,11 +367,36 @@ export default function ComposeScreen() {
         <Text style={{ marginTop: 14, textAlign: 'center', fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
           它会藏在你现在的位置，等一个路过的人 · 30 天或 99 人读到后消散
         </Text>
-        {!location && (
-          <Text style={{ marginTop: 8, textAlign: 'center', fontSize: 12, color: '#F2A7C8' }}>
-            还没找到你的位置，先等等定位，或去演示模式设置虚拟位置
-          </Text>
-        )}
+        {/* 当前位置状态行：坐标/定位中/权限引导/重试，小字不抢主文案 */}
+        <View style={{ marginTop: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+          {demoMode ? (
+            <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
+              {location
+                ? `虚拟位置 · ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`
+                : '还没找到你的位置，去演示模式设置虚拟位置'}
+            </Text>
+          ) : locationStatus === 'ready' && location ? (
+            <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
+              已定位 · {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
+            </Text>
+          ) : locationStatus === 'locating' ? (
+            <Text style={{ fontSize: 12, color: '#F2A7C8', letterSpacing: 0.5 }}>定位中…</Text>
+          ) : locationStatus === 'denied' ? (
+            <>
+              <Text style={{ fontSize: 12, color: '#F2A7C8', letterSpacing: 0.5 }}>定位权限没开</Text>
+              <TouchableOpacity onPress={() => Linking.openSettings().catch(() => undefined)}>
+                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>去开启</Text>
+              </TouchableOpacity>
+            </>
+          ) : (
+            <>
+              <Text style={{ fontSize: 12, color: '#F2A7C8', letterSpacing: 0.5 }}>定位信号弱，稍等片刻</Text>
+              <TouchableOpacity onPress={retryLocation}>
+                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>重试</Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
       </ScrollView>
 
       {/* 媒体来源选择层（原生端；web 直开相册不经过这里） */}

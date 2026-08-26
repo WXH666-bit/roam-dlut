@@ -1,5 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
+import Geolocation from 'react-native-geolocation-service';
+import { AppState, Platform } from 'react-native';
 import React, {
   createContext,
   useCallback,
@@ -23,6 +25,9 @@ export interface LatLng {
   lng: number;
 }
 
+/** locating=定位中；ready=已拿到坐标；denied=权限被拒；unavailable=权限有但两引擎都拿不到坐标 */
+export type LocationStatus = 'locating' | 'ready' | 'denied' | 'unavailable';
+
 interface AppContextValue {
   deviceId: string | null;
   /** 服务端开启 SERVER_SECRET 时签发的设备令牌，开信/点赞时随请求回传 */
@@ -33,7 +38,11 @@ interface AppContextValue {
   adoptIdentity: (u: ApiUser) => Promise<void>;
   // 定位：demoMode 开启时用 mockLocation，否则用真实 GPS
   location: LatLng | null;
+  /** 定位流程是否已离开"定位中"（ready/denied/unavailable 任一终态） */
   locationReady: boolean;
+  locationStatus: LocationStatus;
+  /** 手动重试定位（重走权限请求与双引擎全流程） */
+  retryLocation: () => void;
   demoMode: boolean;
   setDemoMode: (on: boolean) => void;
   mockLocation: LatLng | null;
@@ -59,12 +68,21 @@ const DEVICE_TOKEN_KEY = 'cidi:device_token';
 const ONBOARDED_KEY = 'cidi:onboarded';
 const POLL_INTERVAL = 30_000;
 
+// web 端 expo-location 的 subscription.remove() 会碰不存在的原生 EventEmitter，静默降级
+const removeExpoWatch = (sub: Location.LocationSubscription | null) => {
+  try {
+    sub?.remove();
+  } catch {
+    // 忽略清理失败，引用照常释放
+  }
+};
+
 export function AppProvider({ children }: { children: ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [deviceToken, setDeviceToken] = useState<string | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
   const [gpsLocation, setGpsLocation] = useState<LatLng | null>(null);
-  const [locationReady, setLocationReady] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<LocationStatus>('locating');
   const [demoMode, setDemoModeState] = useState(false);
   const [mockLocation, setMockLocationState] = useState<LatLng | null>(null);
   const [aliveMessages, setAliveMessages] = useState<AliveMessageBrief[]>([]);
@@ -73,6 +91,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [readLimit, setReadLimit] = useState(99);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
+  const geoWatchIdRef = useRef<number | null>(null);
+  const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // 定位流程令牌：重入（retry）或卸载时递增，作废旧流程的异步回调
+  const locationRunRef = useRef(0);
 
   // 启动：设备注册 + 已读缓存恢复
   useEffect(() => {
@@ -110,44 +132,121 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  // GPS 监听（前台，低频省电）
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (cancelled) return;
-        if (status !== 'granted') {
-          setLocationReady(true);
-          return;
-        }
-        const last = await Location.getLastKnownPositionAsync();
-        if (!cancelled && last) {
-          setGpsLocation({ lat: last.coords.latitude, lng: last.coords.longitude });
-        }
-        watchRef.current = await Location.watchPositionAsync(
-          {
-            accuracy: Location.Accuracy.Balanced,
-            timeInterval: 5000,
-            distanceInterval: 10,
-          },
-          (pos) => {
-            setGpsLocation({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-            setLocationReady(true);
-          }
-        );
-        setLocationReady(true);
-      } catch (e) {
-        console.warn('[app] location watch failed:', e);
-        if (!cancelled) setLocationReady(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-      watchRef.current?.remove();
-      watchRef.current = null;
-    };
+  // 停掉两套定位引擎与备用切换定时器（重入/卸载前必调）
+  const stopLocationEngines = useCallback(() => {
+    removeExpoWatch(watchRef.current);
+    watchRef.current = null;
+    if (geoWatchIdRef.current !== null) {
+      Geolocation.clearWatch(geoWatchIdRef.current);
+      geoWatchIdRef.current = null;
+    }
+    if (fallbackTimerRef.current) {
+      clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = null;
+    }
   }, []);
+
+  // 定位全流程：expo-location 主引擎；Android 上 8 秒无坐标则切备用引擎
+  // （华为/荣耀国行无 GMS，expo-location 的 FusedLocationProvider 不回调，
+  //  react-native-geolocation-service 的 forceLocationManager 走系统 LocationManager 兜底）
+  const startLocation = useCallback(async () => {
+    const run = ++locationRunRef.current;
+    const stale = () => run !== locationRunRef.current;
+    stopLocationEngines();
+    setLocationStatus('locating');
+
+    const onFix = (lat: number, lng: number) => {
+      setGpsLocation({ lat, lng });
+      setLocationStatus('ready');
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+    };
+
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (stale()) return;
+      if (status !== 'granted') {
+        setLocationStatus('denied');
+        return;
+      }
+      const last = await Location.getLastKnownPositionAsync();
+      if (stale()) return;
+      if (last) onFix(last.coords.latitude, last.coords.longitude);
+      const sub = await Location.watchPositionAsync(
+        {
+          accuracy: Location.Accuracy.Balanced,
+          timeInterval: 5000,
+          distanceInterval: 10,
+        },
+        (pos) => onFix(pos.coords.latitude, pos.coords.longitude)
+      );
+      if (stale()) {
+        removeExpoWatch(sub);
+        return;
+      }
+      watchRef.current = sub;
+      if (Platform.OS === 'android') {
+        fallbackTimerRef.current = setTimeout(() => {
+          if (stale()) return;
+          fallbackTimerRef.current = null;
+          removeExpoWatch(watchRef.current);
+          watchRef.current = null;
+          geoWatchIdRef.current = Geolocation.watchPosition(
+            (pos) => onFix(pos.coords.latitude, pos.coords.longitude),
+            (err) => {
+              if (stale()) return;
+              // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
+              if (err.code === 1) setLocationStatus('denied');
+              else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+            },
+            {
+              enableHighAccuracy: true,
+              distanceFilter: 10,
+              interval: 5000,
+              forceLocationManager: true,
+            }
+          );
+        }, 8000);
+      } else if (Platform.OS === 'ios') {
+        // iOS 无 GMS 问题，备用引擎不启用；超时仅提示，watch 回调仍可把状态翻回 ready
+        fallbackTimerRef.current = setTimeout(() => {
+          if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+        }, 8000);
+      }
+    } catch (e) {
+      console.warn('[app] location start failed:', e);
+      if (!stale()) setLocationStatus('unavailable');
+    }
+  }, [stopLocationEngines]);
+
+  const retryLocation = useCallback(() => {
+    startLocation();
+  }, [startLocation]);
+
+  const locationStatusRef = useRef<LocationStatus>('locating');
+  useEffect(() => {
+    locationStatusRef.current = locationStatus;
+  }, [locationStatus]);
+
+  // 权限被拒后去系统设置开了权限，回到 App 时自动重试（仅 denied 态，不打断正常流程）
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (s) => {
+      if (s === 'active' && locationStatusRef.current === 'denied') startLocation();
+    });
+    return () => sub.remove();
+  }, [startLocation]);
+
+  // GPS 监听（前台，低频省电）；首拍异步触发，避免在 effect 内同步 setState
+  useEffect(() => {
+    const first = setTimeout(startLocation, 0);
+    return () => {
+      clearTimeout(first);
+      locationRunRef.current += 1;
+      stopLocationEngines();
+    };
+  }, [startLocation, stopLocationEngines]);
 
   const refreshMessages = useCallback(async () => {
     try {
@@ -230,6 +329,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, []);
 
   const location = demoMode ? mockLocation : gpsLocation;
+  const locationReady = locationStatus !== 'locating';
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -240,6 +340,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       adoptIdentity,
       location,
       locationReady,
+      locationStatus,
+      retryLocation,
       demoMode,
       setDemoMode,
       mockLocation,
@@ -254,7 +356,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       readLimit,
     }),
     [
-      deviceId, deviceToken, user, adoptIdentity, location, locationReady, demoMode, mockLocation,
+      deviceId, deviceToken, user, adoptIdentity, location, locationReady, locationStatus,
+      retryLocation, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, markRead,
       onboarded, completeOnboarding, readLimit,
     ]
