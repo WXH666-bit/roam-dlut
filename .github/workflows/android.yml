@@ -23,15 +23,15 @@ jobs:
           fi
           echo "后端地址: $EXPO_PUBLIC_BACKEND_BASE_URL"
 
-      - name: Setup pnpm 9
+      # pnpm/action-setup@v4 自动读取根 package.json 的 packageManager 字段（pnpm@9.0.0）
+      # 不要再传 with.version，否则与 packageManager 冲突报 ERR_PNPM_BAD_PM_VERSION
+      - name: Setup pnpm
         uses: pnpm/action-setup@v4
-        with:
-          version: 9
 
-      - name: Setup Node 20
+      - name: Setup Node 22 LTS
         uses: actions/setup-node@v4
         with:
-          node-version: 20
+          node-version: 22
           cache: pnpm
 
       - name: 安装依赖（pnpm workspace，含 patchedDependencies 补丁）
