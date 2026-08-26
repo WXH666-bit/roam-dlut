@@ -164,6 +164,32 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
 
+    // 备用引擎：停 expo watch，强制走系统 LocationManager（终态交给 onError 判定）
+    const startFallbackEngine = () => {
+      if (stale()) return;
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+      removeExpoWatch(watchRef.current);
+      watchRef.current = null;
+      geoWatchIdRef.current = Geolocation.watchPosition(
+        (pos) => onFix(pos.coords.latitude, pos.coords.longitude),
+        (err) => {
+          if (stale()) return;
+          // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
+          if (err.code === 1) setLocationStatus('denied');
+          else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+        },
+        {
+          enableHighAccuracy: true,
+          distanceFilter: 10,
+          interval: 5000,
+          forceLocationManager: true,
+        }
+      );
+    };
+
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
       if (stale()) return;
@@ -188,27 +214,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       watchRef.current = sub;
       if (Platform.OS === 'android') {
-        fallbackTimerRef.current = setTimeout(() => {
-          if (stale()) return;
-          fallbackTimerRef.current = null;
-          removeExpoWatch(watchRef.current);
-          watchRef.current = null;
-          geoWatchIdRef.current = Geolocation.watchPosition(
-            (pos) => onFix(pos.coords.latitude, pos.coords.longitude),
-            (err) => {
-              if (stale()) return;
-              // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
-              if (err.code === 1) setLocationStatus('denied');
-              else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
-            },
-            {
-              enableHighAccuracy: true,
-              distanceFilter: 10,
-              interval: 5000,
-              forceLocationManager: true,
-            }
-          );
-        }, 8000);
+        fallbackTimerRef.current = setTimeout(startFallbackEngine, 8000);
       } else if (Platform.OS === 'ios') {
         // iOS 无 GMS 问题，备用引擎不启用；超时仅提示，watch 回调仍可把状态翻回 ready
         fallbackTimerRef.current = setTimeout(() => {
@@ -217,7 +223,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     } catch (e) {
       console.warn('[app] location start failed:', e);
-      if (!stale()) setLocationStatus('unavailable');
+      if (stale()) return;
+      // Android 主引擎任何一步异常都还有备用引擎可试；iOS/web 无备用，直接终态
+      if (Platform.OS === 'android') startFallbackEngine();
+      else setLocationStatus('unavailable');
     }
   }, [stopLocationEngines]);
 
