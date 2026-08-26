@@ -70,9 +70,23 @@ jobs:
       - name: 整理 APK 文件名（带 run 编号）
         run: cp client/android/app/build/outputs/apk/release/app-release.apk "cidi-r${{ github.run_number }}.apk"
 
-      - name: 上传 APK artifact
+      - name: 上传 APK artifact（Actions 页面可下）
         uses: actions/upload-artifact@v4
         with:
           name: cidi-apk-r${{ github.run_number }}
           path: cidi-r${{ github.run_number }}.apk
           retention-days: 30
+
+      # 构建成功后自动把 APK 挂到 latest Release：任何人不登录 GitHub 即可下载
+      - name: 发布到 latest Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: latest
+          name: 此地有话 · 最新版 APK
+          body: |
+            main 分支最新自动构建（r${{ github.run_number }}）。
+
+            **下载**：下方 Assets 中的 cidi-r${{ github.run_number }}.apk，直接安装即可。
+            首次安装需允许"未知来源应用"。需要后端服务在线才能正常使用。
+          files: cidi-r${{ github.run_number }}.apk
+          make_latest: true
