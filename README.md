@@ -89,13 +89,26 @@ pnpm lint:server    # 仅后端检查
 | `MESSAGE_TTL_DAYS` | `30` | 存活天数，到期消散 |
 | `MESSAGE_DAILY_LIMIT` | `3` | 每设备每日发布上限 |
 | `PORT` | `9091` | 后端监听端口 |
-| `STORAGE_PROVIDER` | 开发态内置存储 | 设为 `qiniu` 时切换为七牛 Kodo（需同时设下方 4 个变量） |
+| `STORAGE_PROVIDER` | 开发态内置存储 | 设为 `qiniu` 时切换为七牛 Kodo（需同时设下方 4 个变量）；设为 `local` 时落盘 `data/uploads/` |
+| `PUBLIC_BASE_URL` | `http://localhost:9091` | 仅 `local` 模式用：媒体 URL 前缀，部署时配 `http://<公网IP>:9091` |
 | `QINIU_S3_ENDPOINT` | — | Kodo 的 S3 兼容端点，如 `s3.cn-east-1.qiniucs.com`（可不带 `https://`） |
 | `QINIU_ACCESS_KEY` | — | 七牛账号 AK |
 | `QINIU_SECRET_KEY` | — | 七牛账号 SK |
 | `QINIU_BUCKET` | — | Kodo 空间名 |
 | `DATABASE_URL` | 内存 + JSON | MySQL 连接串，如 `mysql://user:pass@host:3306/cidi`；设置后数据走 MySQL |
 | `SERVER_SECRET` | 不校验 | 设置后注册接口签发设备 token，开信/点赞须带 `x-device-token` 头（轻量防刷） |
+
+## 无对象存储的快速部署（过渡方案）
+
+普通服务器上跑演示、还没有七牛账号时，两个环境变量即可：
+
+```bash
+STORAGE_PROVIDER=local PUBLIC_BASE_URL=http://<公网IP>:9091 pnpm dev
+```
+
+媒体文件落盘到 `server/data/uploads/`，由后端 `/media/<key>` 静态服务直接暴露（支持 Range，视频可拖进度条）。适用场景：过渡部署、线下演示、小流量内测——本地磁盘无冗余，不适合正式运营。
+
+之后切七牛**只改环境变量**（`STORAGE_PROVIDER=qiniu` + 七牛四件套），代码零改动；已落盘的本地文件不会自动迁移。
 
 ## 部署到七牛云
 
