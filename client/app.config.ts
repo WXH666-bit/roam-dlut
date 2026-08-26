@@ -1,8 +1,31 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+// EAS Update 热更新开关：唯一的 ID 维护点是 eas.json 的 projectId。
+// 占位符未替换或读取失败时不注入 updates 配置，APK 行为与接入前完全一致（无热更）。
+const easProjectId = ((): string | null => {
+  try {
+    const parsed = JSON.parse(readFileSync(join(__dirname, 'eas.json'), 'utf8')) as { projectId?: string };
+    const id = parsed.projectId?.trim();
+    return id && id !== 'TODO_EAS_PROJECT_ID' ? id : null;
+  } catch {
+    return null;
+  }
+})();
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
+    ...(easProjectId
+      ? {
+          updates: { url: `https://u.expo.dev/${easProjectId}` },
+          // runtimeVersion 用 appVersion 策略，绑定本文件的 version 字段：
+          // 每次原生层改动（新增/升级原生依赖、改权限、改 gradle）必须把 version 从 1.0.0 递增，
+          // 否则热更会推到不兼容的原生层上。
+          runtimeVersion: { policy: 'appVersion' },
+        }
+      : {}),
     "name": "此地有话",
     "slug": "roam-dlut",
     "version": "1.0.0",

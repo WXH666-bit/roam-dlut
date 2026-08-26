@@ -1,0 +1,4 @@
+{
+  "cli": { "version": ">= 12.0.0" },
+  "projectId": "TODO_EAS_PROJECT_ID"
+}

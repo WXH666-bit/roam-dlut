@@ -22,6 +22,7 @@ import { DemoPanel } from '@/components/DemoPanel';
 import { useApp } from '@/contexts/AppContext';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
+import { useOtaUpdate } from '@/hooks/useOtaUpdate';
 import { haversineMeters } from '@/utils/haversine';
 import { playEncounter, playDissolve } from '@/utils/sound';
 import { DissolveFx } from '@/components/DissolveFx';
@@ -140,6 +141,7 @@ export default function HomeScreen() {
   }, [location, aliveMessages, readIds]);
 
   const waitingText = useMemo(() => (aliveTotal > 0 ? '条留言正在等待' : '条留言刚刚都消散了'), [aliveTotal]);
+  const { status: otaStatus, reload: reloadOta } = useOtaUpdate();
 
   // 首次启动先去引导页；标志位读取中先只铺夜空
   if (onboarded === null) {
@@ -197,6 +199,33 @@ export default function HomeScreen() {
             <FontAwesome6 name="user" size={16} color="#EDE7F6" />
           </TouchableOpacity>
         </View>
+
+        {/* 热更新就绪横幅：仅后台下载完成后出现，绝不自动重启 */}
+        {otaStatus === 'ready' && (
+          <Animated.View
+            entering={FadeIn.duration(500)}
+            style={{
+              marginTop: 10,
+              marginHorizontal: 20,
+              paddingVertical: 8,
+              paddingHorizontal: 14,
+              borderRadius: 12,
+              backgroundColor: 'rgba(255,255,255,0.05)',
+              borderWidth: 1,
+              borderColor: 'rgba(245,194,107,0.18)',
+              flexDirection: 'row',
+              alignItems: 'center',
+              justifyContent: 'center',
+              gap: 10,
+            }}
+          >
+            <Text style={{ fontSize: 12, color: 'rgba(237,231,246,0.85)', letterSpacing: 1 }}>已为你更新到新版本</Text>
+            <TouchableOpacity onPress={reloadOta}>
+              <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>立即重启</Text>
+            </TouchableOpacity>
+            <Text style={{ fontSize: 11, color: 'rgba(142,139,163,0.7)', letterSpacing: 0.5 }}>下次启动生效</Text>
+          </Animated.View>
+        )}
 
         {/* 守候区 */}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 }}>
