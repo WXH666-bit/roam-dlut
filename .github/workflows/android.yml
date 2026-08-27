@@ -66,6 +66,25 @@ jobs:
           fi
           echo "OK: $MANIFEST 已包含 usesCleartextTraffic=true"
 
+      # expo-updates 的 Release KSP 编译会加载大量 Kotlin 元数据；Expo 模板默认的
+      # Metaspace 上限在 GitHub Runner 上可能不够。统一放进 Gradle 进程并限制 worker，
+      # 既提高 Metaspace 上限，也避免多个 JVM 并发把 Runner 内存耗尽。
+      - name: 配置 Gradle/Kotlin 内存（避免 KSP Metaspace OOM）
+        shell: bash
+        run: |
+          GRADLE_PROPERTIES=client/android/gradle.properties
+          sed -i \
+            -e '/^org\.gradle\.jvmargs=/d' \
+            -e '/^kotlin\.compiler\.execution\.strategy=/d' \
+            -e '/^org\.gradle\.workers\.max=/d' \
+            "$GRADLE_PROPERTIES"
+          printf '\n%s\n%s\n%s\n' \
+            'org.gradle.jvmargs=-Xmx4g -XX:MaxMetaspaceSize=1g -XX:+HeapDumpOnOutOfMemoryError -Dfile.encoding=UTF-8' \
+            'kotlin.compiler.execution.strategy=in-process' \
+            'org.gradle.workers.max=2' \
+            >> "$GRADLE_PROPERTIES"
+          grep -E '^(org\.gradle\.jvmargs|kotlin\.compiler\.execution\.strategy|org\.gradle\.workers\.max)=' "$GRADLE_PROPERTIES"
+
       - name: Gradle assembleRelease（Expo 模板 release 默认 debug keystore 签名，可直接安装）
         working-directory: client/android
         run: ./gradlew assembleRelease --no-daemon
