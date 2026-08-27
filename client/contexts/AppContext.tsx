@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import Geolocation, { type GeoWatchOptions } from 'react-native-geolocation-service';
+import Geolocation from 'react-native-geolocation-service';
 import { AppState, Platform } from 'react-native';
 import React, {
   createContext,
@@ -96,6 +96,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const geoWatchIdRef = useRef<number | null>(null);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const fallbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 定位流程令牌：重入（retry）或卸载时递增，作废旧流程的异步回调
   const locationRunRef = useRef(0);
 
@@ -147,6 +148,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       clearTimeout(fallbackTimerRef.current);
       fallbackTimerRef.current = null;
     }
+    if (fallbackWatchdogRef.current) {
+      clearTimeout(fallbackWatchdogRef.current);
+      fallbackWatchdogRef.current = null;
+    }
   }, []);
 
   // 定位全流程：expo-location 主引擎；Android 上 8 秒无坐标则切备用引擎
@@ -167,14 +172,23 @@ export function AppProvider({ children }: { children: ReactNode }) {
         clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
+      if (fallbackWatchdogRef.current) {
+        clearTimeout(fallbackWatchdogRef.current);
+        fallbackWatchdogRef.current = null;
+      }
     };
 
     // 备用引擎：停 expo watch，强制走系统 LocationManager（终态交给 onError 判定）
     const startFallbackEngine = () => {
       if (stale()) return;
+      // 清旧切换定时器与旧看门狗，防止 catch 路径与定时器路径先后触发
       if (fallbackTimerRef.current) {
         clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
+      }
+      if (fallbackWatchdogRef.current) {
+        clearTimeout(fallbackWatchdogRef.current);
+        fallbackWatchdogRef.current = null;
       }
       removeExpoWatch(watchRef.current);
       watchRef.current = null;
@@ -190,12 +204,29 @@ export function AppProvider({ children }: { children: ReactNode }) {
           enableHighAccuracy: true,
           distanceFilter: 10,
           interval: 5000,
-          // 15 秒无首个 fix 触发一次 onError(code 3) 置 unavailable；订阅保持，
-          // 之后真实 fix 到达仍会自动翻回 ready（先明确提示、后自动恢复）。
-          // GeoWatchOptions 类型漏声明 timeout，原生 Android startObserving 实际支持，断言补齐
-          timeout: 15000,
           forceLocationManager: true,
-        } as GeoWatchOptions & { timeout: number }
+        }
+      );
+      // JS 看门狗：15 秒无 fix 置 unavailable；订阅保持，真实 fix 到达时 onFix 自动翻回 ready
+      fallbackWatchdogRef.current = setTimeout(() => {
+        if (stale()) return;
+        setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+      }, 15000);
+      // 首拍缓存：并行 getCurrentPosition，命中系统 LocationManager 缓存可秒回
+      Geolocation.getCurrentPosition(
+        (pos) => {
+          if (stale()) return;
+          onFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null);
+        },
+        () => {
+          // 静默忽略，状态出口只有看门狗和 watch 的 onError，避免双写竞争
+        },
+        {
+          timeout: 15000,
+          maximumAge: 600000,
+          enableHighAccuracy: true,
+          forceLocationManager: true,
+        }
       );
     };
 
