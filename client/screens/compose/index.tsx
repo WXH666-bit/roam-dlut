@@ -45,7 +45,7 @@ interface PickedMedia {
 export default function ComposeScreen() {
   const router = useSafeRouter();
   const handwriting = useHandwritingFont();
-  const { deviceId, location, locationStatus, retryLocation, demoMode, refreshMessages, user } = useApp();
+  const { deviceId, location, locationAccuracy, locationStatus, retryLocation, demoMode, refreshMessages, user } = useApp();
 
   const [text, setText] = useState('');
   const [media, setMedia] = useState<PickedMedia | null>(null);
@@ -368,7 +368,7 @@ export default function ComposeScreen() {
           它会藏在你现在的位置，等一个路过的人 · 30 天或 99 人读到后消散
         </Text>
         {/* 当前位置状态行：坐标/定位中/权限引导/重试，小字不抢主文案 */}
-        <View style={{ marginTop: 8, flexDirection: 'row', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
+        <View style={{ marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
           {demoMode ? (
             <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
               {location
@@ -376,9 +376,16 @@ export default function ComposeScreen() {
                 : '还没找到你的位置，去演示模式设置虚拟位置'}
             </Text>
           ) : locationStatus === 'ready' && location ? (
-            <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
-              已定位 · {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
-            </Text>
+            <>
+              <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
+                已定位 · {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
+              </Text>
+              {locationAccuracy !== null && locationAccuracy >= 50 && (
+                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+                  定位精度约±{Math.round(locationAccuracy)}米 · 建议到开阔处
+                </Text>
+              )}
+            </>
           ) : locationStatus === 'locating' ? (
             <Text style={{ fontSize: 12, color: '#F2A7C8', letterSpacing: 0.5 }}>定位中…</Text>
           ) : locationStatus === 'denied' ? (

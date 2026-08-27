@@ -1,6 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import Geolocation from 'react-native-geolocation-service';
+import Geolocation, { type GeoWatchOptions } from 'react-native-geolocation-service';
 import { AppState, Platform } from 'react-native';
 import React, {
   createContext,
@@ -38,6 +38,8 @@ interface AppContextValue {
   adoptIdentity: (u: ApiUser) => Promise<void>;
   // 定位：demoMode 开启时用 mockLocation，否则用真实 GPS
   location: LatLng | null;
+  /** 最近一次坐标的水平精度（米），未知为 null；>=50（偶遇半径）时坐标可能不足以触发偶遇 */
+  locationAccuracy: number | null;
   /** 定位流程是否已离开"定位中"（ready/denied/unavailable 任一终态） */
   locationReady: boolean;
   locationStatus: LocationStatus;
@@ -82,6 +84,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [deviceToken, setDeviceToken] = useState<string | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
   const [gpsLocation, setGpsLocation] = useState<LatLng | null>(null);
+  const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>('locating');
   const [demoMode, setDemoModeState] = useState(false);
   const [mockLocation, setMockLocationState] = useState<LatLng | null>(null);
@@ -154,9 +157,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
     const stale = () => run !== locationRunRef.current;
     stopLocationEngines();
     setLocationStatus('locating');
+    setLocationAccuracy(null);
 
-    const onFix = (lat: number, lng: number) => {
+    const onFix = (lat: number, lng: number, accuracy: number | null) => {
       setGpsLocation({ lat, lng });
+      setLocationAccuracy(accuracy);
       setLocationStatus('ready');
       if (fallbackTimerRef.current) {
         clearTimeout(fallbackTimerRef.current);
@@ -174,7 +179,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       removeExpoWatch(watchRef.current);
       watchRef.current = null;
       geoWatchIdRef.current = Geolocation.watchPosition(
-        (pos) => onFix(pos.coords.latitude, pos.coords.longitude),
+        (pos) => onFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null),
         (err) => {
           if (stale()) return;
           // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
@@ -185,8 +190,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
           enableHighAccuracy: true,
           distanceFilter: 10,
           interval: 5000,
+          // 15 秒无首个 fix 触发一次 onError(code 3) 置 unavailable；订阅保持，
+          // 之后真实 fix 到达仍会自动翻回 ready（先明确提示、后自动恢复）。
+          // GeoWatchOptions 类型漏声明 timeout，原生 Android startObserving 实际支持，断言补齐
+          timeout: 15000,
           forceLocationManager: true,
-        }
+        } as GeoWatchOptions & { timeout: number }
       );
     };
 
@@ -199,14 +208,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       const last = await Location.getLastKnownPositionAsync();
       if (stale()) return;
-      if (last) onFix(last.coords.latitude, last.coords.longitude);
+      if (last) onFix(last.coords.latitude, last.coords.longitude, last.coords.accuracy ?? null);
       const sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
           timeInterval: 5000,
           distanceInterval: 10,
         },
-        (pos) => onFix(pos.coords.latitude, pos.coords.longitude)
+        (pos) => onFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null)
       );
       if (stale()) {
         removeExpoWatch(sub);
@@ -348,6 +357,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setUser,
       adoptIdentity,
       location,
+      locationAccuracy,
       locationReady,
       locationStatus,
       retryLocation,
@@ -365,8 +375,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       readLimit,
     }),
     [
-      deviceId, deviceToken, user, adoptIdentity, location, locationReady, locationStatus,
-      retryLocation, demoMode, mockLocation,
+      deviceId, deviceToken, user, adoptIdentity, location, locationAccuracy, locationReady,
+      locationStatus, retryLocation, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, markRead,
       onboarded, completeOnboarding, readLimit,
     ]
