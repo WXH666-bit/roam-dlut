@@ -1,10 +1,19 @@
 import { Router } from 'express';
-import { addLike, addReader, createMessage, ensureUser, findMessage, listMessages } from '../store';
+import {
+  addLikeAndCreateNotificationEvent,
+  addReader,
+  createMessage,
+  ensureUser,
+  findMessage,
+  listMessages,
+  listPushTokens,
+} from '../store';
 import { isAlive, type Message } from '../types';
 import { config, TTL_MS } from '../config';
 import { hitSensitiveWord } from '../sensitiveWords';
 import { mediaUrlOf } from '../storage';
 import { tokenValid } from '../auth';
+import { sendLikeNotification } from '../notifications';
 
 const router = Router();
 
@@ -123,11 +132,29 @@ router.post('/:id/like', async (req, res) => {
   if (deviceId !== m.deviceId && !m.readers.includes(deviceId)) {
     return res.status(403).json({ error: 'unlock_first' });
   }
-  if (!m.likes.includes(deviceId)) {
-    m.likes.push(deviceId);
-    await addLike(m.id, deviceId);
+  let likeResult: Awaited<ReturnType<typeof addLikeAndCreateNotificationEvent>>;
+  try {
+    likeResult = await addLikeAndCreateNotificationEvent(m.id, deviceId);
+  } catch (error) {
+    console.error('[store] like transaction failed:', error);
+    return res.status(503).json({ error: 'temporary_unavailable' });
   }
-  return res.json({ likes: m.likes.length, liked: true });
+
+  if (likeResult.notificationEvent) {
+    try {
+      const tokens = await listPushTokens(m.deviceId);
+      // Delivery is deliberately best effort; durable event polling is the fallback.
+      void sendLikeNotification(tokens.map((entry) => entry.token), likeResult.notificationEvent);
+    } catch (error) {
+      // A push-token/provider outage must not undo a successful like or event.
+      console.error('[notifications] push preparation failed:', error);
+    }
+  }
+  const latest = await findMessage(m.id);
+  return res.json({
+    likes: latest?.likes.length ?? m.likes.length + (likeResult.added ? 1 : 0),
+    liked: true,
+  });
 });
 
 export default router;

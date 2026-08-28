@@ -4,6 +4,7 @@ import Toast from 'react-native-toast-message';
 import { Provider } from '@/components/Provider';
 import { FontProvider } from '@/contexts/FontContext';
 import { OtaUpdateProvider } from '@/contexts/OtaUpdateContext';
+import { NotificationBridge } from '@/services/NotificationBridge';
 
 import '../global.css';
 
@@ -28,6 +29,7 @@ export default function RootLayout() {
             <Stack.Screen name="profile" options={{ title: '' }} />
           </Stack>
           <Toast />
+          <NotificationBridge />
         </OtaUpdateProvider>
       </Provider>
     </FontProvider>

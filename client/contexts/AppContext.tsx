@@ -19,6 +19,7 @@ import {
   type ApiUser,
 } from '@/utils/api';
 import { getDeviceId, overwriteDeviceId } from '@/utils/device';
+import { READ_IDS_STORAGE_KEY } from '@/utils/notificationStorage';
 
 export interface LatLng {
   lat: number;
@@ -55,6 +56,8 @@ interface AppContextValue {
   refreshMessages: () => Promise<void>;
   // 已读缓存（本地）
   readIds: Set<string>;
+  /** 已读缓存已从磁盘恢复，后台任务可安全同步当前集合。 */
+  readIdsReady: boolean;
   markRead: (id: string) => void;
   // 首次引导：null=读取中，false=未引导（首页重定向去引导页）
   onboarded: boolean | null;
@@ -65,7 +68,7 @@ interface AppContextValue {
 
 const AppContext = createContext<AppContextValue | null>(null);
 
-const READ_IDS_KEY = 'cidi:read_ids';
+const READ_IDS_KEY = READ_IDS_STORAGE_KEY;
 const DEVICE_TOKEN_KEY = 'cidi:device_token';
 const ONBOARDED_KEY = 'cidi:onboarded';
 const POLL_INTERVAL = 30_000;
@@ -91,6 +94,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [aliveMessages, setAliveMessages] = useState<AliveMessageBrief[]>([]);
   const [aliveTotal, setAliveTotal] = useState(0);
   const [readIds, setReadIds] = useState<Set<string>>(new Set());
+  const [readIdsReady, setReadIdsReady] = useState(false);
   const [onboarded, setOnboarded] = useState<boolean | null>(null);
   const [readLimit, setReadLimit] = useState(99);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
@@ -126,6 +130,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
         if (raw) setReadIds(new Set(JSON.parse(raw) as string[]));
       } catch {
         // 已读缓存损坏则从空开始
+      } finally {
+        setReadIdsReady(true);
       }
       try {
         const ob = await AsyncStorage.getItem(ONBOARDED_KEY);
@@ -456,6 +462,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       aliveTotal,
       refreshMessages,
       readIds,
+      readIdsReady,
       markRead,
       onboarded,
       completeOnboarding,
@@ -464,7 +471,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [
       deviceId, deviceToken, user, adoptIdentity, location, locationAccuracy, locationReady,
       locationStatus, retryLocation, demoMode, mockLocation,
-      setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, markRead,
+      setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, readIdsReady, markRead,
       onboarded, completeOnboarding, readLimit,
     ]
   );

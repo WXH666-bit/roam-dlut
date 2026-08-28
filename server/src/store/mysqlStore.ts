@@ -1,9 +1,17 @@
 import mysql from 'mysql2/promise';
 import crypto from 'node:crypto';
-import type { Message, MediaType, User } from '../types';
+import type {
+  LikeResult,
+  Message,
+  MediaType,
+  NotificationEvent,
+  PushToken,
+  User,
+} from '../types';
 import { buildSeedMessages } from '../seeds';
 import { randomFlowerName } from '../flowerNames';
 import { randomRecoveryCode } from '../recoveryWords';
+import { isExpoPushToken, MAX_PUSH_TOKENS_PER_DEVICE } from '../pushTokens';
 import type { DataStore } from './index';
 
 interface MessageRow {
@@ -68,6 +76,104 @@ export class MysqlStore implements DataStore {
       device_id VARCHAR(64) NOT NULL,
       PRIMARY KEY (message_id, device_id)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS notification_events (
+      id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+      type VARCHAR(64) NOT NULL,
+      recipient_device_id VARCHAR(64) NOT NULL,
+      message_id VARCHAR(32) NOT NULL,
+      created_at BIGINT NOT NULL,
+      INDEX idx_notification_events_recipient_id (recipient_device_id, id),
+      INDEX idx_notification_events_created (created_at)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS notification_event_sequence (
+      singleton TINYINT UNSIGNED NOT NULL PRIMARY KEY,
+      next_id BIGINT UNSIGNED NOT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    await this.pool.query(`INSERT INTO notification_event_sequence (singleton, next_id)
+      SELECT 1, COALESCE(MAX(id), 0) + 1 FROM notification_events
+      ON DUPLICATE KEY UPDATE next_id = GREATEST(next_id, VALUES(next_id))`);
+    await this.pool.query(`CREATE TABLE IF NOT EXISTS push_tokens (
+      device_id VARCHAR(64) NOT NULL,
+      token VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+      updated_at BIGINT NOT NULL,
+      PRIMARY KEY (token),
+      INDEX idx_push_tokens_device (device_id)
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    // Remove malformed legacy values before converting an older utf8 column
+    // to ASCII; otherwise one bad row can make the whole schema upgrade fail.
+    await this.pool.query('DELETE FROM push_tokens WHERE token IS NULL');
+    const [legacyPushTokens] = await this.pool.query<mysql.RowDataPacket[]>(
+      'SELECT token FROM push_tokens'
+    );
+    const malformedTokens = legacyPushTokens
+      .map((row) => String(row.token))
+      .filter((token) => !isExpoPushToken(token));
+    for (let start = 0; start < malformedTokens.length; start += 100) {
+      const batch = malformedTokens.slice(start, start + 100);
+      const placeholders = batch.map(() => '?').join(',');
+      await this.pool.query(
+        `DELETE FROM push_tokens WHERE BINARY token IN (${placeholders})`,
+        batch
+      );
+    }
+    // CREATE TABLE IF NOT EXISTS does not update an existing deployment. Expo
+    // tokens are case-sensitive, so normalize the legacy column once.
+    const [pushTokenColumns] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT COLLATION_NAME AS collation_name FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'push_tokens' AND COLUMN_NAME = 'token'`
+    );
+    if (String(pushTokenColumns[0]?.collation_name ?? '').toLowerCase() !== 'ascii_bin') {
+      await this.pool.query(`ALTER TABLE push_tokens
+        MODIFY token VARCHAR(512) CHARACTER SET ascii COLLATE ascii_bin NOT NULL`);
+    }
+    const [pushTokenPrimaryKey] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT COLUMN_NAME AS column_name FROM information_schema.KEY_COLUMN_USAGE
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'push_tokens'
+         AND CONSTRAINT_NAME = 'PRIMARY'
+       ORDER BY ORDINAL_POSITION`
+    );
+    const primaryColumns = pushTokenPrimaryKey.map((row) => String(row.column_name));
+    if (primaryColumns.length !== 1 || primaryColumns[0] !== 'token') {
+      // Older experiments used (device_id, token), which lets one physical
+      // installation remain attached to two identities. Keep the newest exact
+      // token binding, then make token itself globally unique.
+      await this.pool.query(`DELETE older FROM push_tokens AS older
+        INNER JOIN push_tokens AS newer ON older.token = newer.token
+          AND (
+            older.updated_at < newer.updated_at OR
+            (older.updated_at = newer.updated_at AND older.device_id < newer.device_id)
+          )`);
+      await this.pool.query(primaryColumns.length === 0
+        ? 'ALTER TABLE push_tokens ADD PRIMARY KEY (token)'
+        : 'ALTER TABLE push_tokens DROP PRIMARY KEY, ADD PRIMARY KEY (token)');
+    }
+    // Apply the current validation and per-identity cap to rows created by an
+    // older release as well, instead of waiting for every device to register
+    // again. Token is now globally unique, so deletions are unambiguous.
+    const [storedPushTokens] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT device_id, token FROM push_tokens
+       ORDER BY device_id ASC, updated_at DESC, token DESC`
+    );
+    const tokenCountByDevice = new Map<string, number>();
+    const staleStoredTokens: string[] = [];
+    for (const row of storedPushTokens) {
+      const deviceId = String(row.device_id);
+      const token = String(row.token);
+      const count = tokenCountByDevice.get(deviceId) ?? 0;
+      if (!isExpoPushToken(token) || count >= MAX_PUSH_TOKENS_PER_DEVICE) {
+        staleStoredTokens.push(token);
+        continue;
+      }
+      tokenCountByDevice.set(deviceId, count + 1);
+    }
+    for (let start = 0; start < staleStoredTokens.length; start += 100) {
+      const batch = staleStoredTokens.slice(start, start + 100);
+      const placeholders = batch.map(() => '?').join(',');
+      await this.pool.query(
+        `DELETE FROM push_tokens WHERE token IN (${placeholders})`,
+        batch
+      );
+    }
 
     // 空库播种（与内存模式行为一致）
     const [rows] = await this.pool.query<mysql.RowDataPacket[]>('SELECT COUNT(*) AS n FROM messages');
@@ -231,10 +337,221 @@ export class MysqlStore implements DataStore {
     );
   }
 
-  async addLike(messageId: string, deviceId: string): Promise<void> {
-    await this.pool.query(
+  async addLike(messageId: string, deviceId: string): Promise<boolean> {
+    const [result] = await this.pool.query<mysql.ResultSetHeader>(
       'INSERT IGNORE INTO message_likes (message_id, device_id) VALUES (?,?)',
       [messageId, deviceId]
     );
+    return result.affectedRows > 0;
+  }
+
+  /**
+   * Allocate an event id while holding the singleton row lock until commit.
+   * MySQL AUTO_INCREMENT values follow insert order, not commit order; without
+   * this gate a later id could become visible first and make a polling cursor
+   * permanently skip the earlier transaction.
+   */
+  private async allocateNotificationEventId(
+    connection: mysql.PoolConnection
+  ): Promise<number> {
+    const [rows] = await connection.query<mysql.RowDataPacket[]>(
+      'SELECT next_id FROM notification_event_sequence WHERE singleton = 1 FOR UPDATE'
+    );
+    const id = Number(rows[0]?.next_id);
+    if (!Number.isSafeInteger(id) || id <= 0) {
+      throw new Error('notification event sequence is unavailable');
+    }
+    await connection.query(
+      'UPDATE notification_event_sequence SET next_id = next_id + 1 WHERE singleton = 1'
+    );
+    return id;
+  }
+
+  async addLikeAndCreateNotificationEvent(
+    messageId: string,
+    deviceId: string
+  ): Promise<LikeResult> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+
+      const [messages] = await connection.query<mysql.RowDataPacket[]>(
+        'SELECT device_id FROM messages WHERE id = ? FOR UPDATE',
+        [messageId]
+      );
+      const recipientDeviceId = messages[0]?.device_id as string | undefined;
+      if (!recipientDeviceId) {
+        await connection.rollback();
+        return { added: false, notificationEvent: null };
+      }
+
+      const [likeResult] = await connection.query<mysql.ResultSetHeader>(
+        'INSERT IGNORE INTO message_likes (message_id, device_id) VALUES (?,?)',
+        [messageId, deviceId]
+      );
+      if (likeResult.affectedRows === 0) {
+        await connection.rollback();
+        return { added: false, notificationEvent: null };
+      }
+
+      let notificationEvent: NotificationEvent | null = null;
+      if (recipientDeviceId !== deviceId) {
+        const createdAt = Date.now();
+        const id = await this.allocateNotificationEventId(connection);
+        await connection.query(
+          `INSERT INTO notification_events
+            (id, type, recipient_device_id, message_id, created_at)
+           VALUES (?,?,?,?,?)`,
+          [id, 'message_like', recipientDeviceId, messageId, createdAt]
+        );
+        notificationEvent = {
+          id,
+          type: 'message_like',
+          recipientDeviceId,
+          messageId,
+          createdAt,
+        };
+      }
+
+      await connection.commit();
+      return { added: true, notificationEvent };
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error('[store] like transaction rollback failed:', rollbackError);
+      }
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async createNotificationEvent(
+    data: Omit<NotificationEvent, 'id'>
+  ): Promise<NotificationEvent> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      const id = await this.allocateNotificationEventId(connection);
+      await connection.query(
+        `INSERT INTO notification_events
+          (id, type, recipient_device_id, message_id, created_at)
+         VALUES (?,?,?,?,?)`,
+        [id, data.type, data.recipientDeviceId, data.messageId, data.createdAt]
+      );
+      await connection.commit();
+      return { ...data, id };
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error('[store] notification transaction rollback failed:', rollbackError);
+      }
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async listNotificationEvents(
+    recipientDeviceId: string,
+    afterId: number,
+    limit = 100,
+    maxId?: number
+  ): Promise<NotificationEvent[]> {
+    const safeLimit = Math.max(1, Math.min(100, Math.trunc(limit)));
+    const maxClause = maxId === undefined ? '' : ' AND id <= ?';
+    const params: Array<string | number> = [recipientDeviceId, afterId];
+    if (maxId !== undefined) params.push(maxId);
+    params.push(safeLimit);
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT id, type, recipient_device_id, message_id, created_at
+       FROM notification_events
+       WHERE recipient_device_id = ? AND id > ?${maxClause}
+       ORDER BY id ASC
+       LIMIT ?`,
+      params
+    );
+    return rows.map((row) => ({
+      id: Number(row.id),
+      type: row.type as NotificationEvent['type'],
+      recipientDeviceId: String(row.recipient_device_id),
+      messageId: String(row.message_id),
+      createdAt: Number(row.created_at),
+    }));
+  }
+
+  async getLatestNotificationEventId(recipientDeviceId: string): Promise<number> {
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      'SELECT MAX(id) AS latest_id FROM notification_events WHERE recipient_device_id = ?',
+      [recipientDeviceId]
+    );
+    return Number(rows[0]?.latest_id ?? 0);
+  }
+
+  async registerPushToken(deviceId: string, token: string): Promise<void> {
+    const connection = await this.pool.getConnection();
+    try {
+      await connection.beginTransaction();
+      // Serialize registrations for one identity so the per-device cap remains
+      // deterministic even when several installations register together.
+      await connection.query(
+        'SELECT device_id FROM users WHERE device_id = ? FOR UPDATE',
+        [deviceId]
+      );
+      await connection.query(
+        `INSERT INTO push_tokens (device_id, token, updated_at)
+         VALUES (?,?,?)
+         ON DUPLICATE KEY UPDATE
+           device_id = VALUES(device_id),
+           updated_at = VALUES(updated_at)`,
+        [deviceId, token, Date.now()]
+      );
+      const [rows] = await connection.query<mysql.RowDataPacket[]>(
+        `SELECT token FROM push_tokens WHERE device_id = ?
+         ORDER BY (BINARY token = BINARY ?) DESC, updated_at DESC, token DESC FOR UPDATE`,
+        [deviceId, token]
+      );
+      const staleTokens = rows
+        .slice(MAX_PUSH_TOKENS_PER_DEVICE)
+        .map((row) => String(row.token));
+      if (staleTokens.length > 0) {
+        const placeholders = staleTokens.map(() => '?').join(',');
+        await connection.query(
+          `DELETE FROM push_tokens WHERE device_id = ? AND token IN (${placeholders})`,
+          [deviceId, ...staleTokens]
+        );
+      }
+      await connection.commit();
+    } catch (error) {
+      try {
+        await connection.rollback();
+      } catch (rollbackError) {
+        console.error('[store] push token transaction rollback failed:', rollbackError);
+      }
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
+  async unregisterPushToken(deviceId: string, token: string): Promise<void> {
+    await this.pool.query(
+      'DELETE FROM push_tokens WHERE device_id = ? AND token = ?',
+      [deviceId, token]
+    );
+  }
+
+  async listPushTokens(deviceId: string): Promise<PushToken[]> {
+    const [rows] = await this.pool.query<mysql.RowDataPacket[]>(
+      'SELECT device_id, token, updated_at FROM push_tokens WHERE device_id = ?',
+      [deviceId]
+    );
+    return rows.map((row) => ({
+      deviceId: String(row.device_id),
+      token: String(row.token),
+      updatedAt: Number(row.updated_at),
+    }));
   }
 }

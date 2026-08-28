@@ -1,28 +1,42 @@
 import { Audio } from 'expo-av';
 
-type SoundKey = 'encounter' | 'dissolve';
+type SoundKey = 'encounter' | 'dissolve' | 'like';
 
 const SOURCES: Record<SoundKey, number> = {
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   encounter: require('../assets/sounds/encounter.wav') as number,
   // eslint-disable-next-line @typescript-eslint/no-require-imports
   dissolve: require('../assets/sounds/dissolve.wav') as number,
+  // 点赞使用轻量的偶遇铃声素材，但保持独立音效入口，未来可替换为专用素材。
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  like: require('../assets/sounds/encounter.wav') as number,
 };
 
 const sounds: Partial<Record<SoundKey, Audio.Sound>> = {};
 
 // 音效只是氛围层：任何失败都静默吞掉，绝不影响主流程
-const play = async (key: SoundKey, volume: number): Promise<void> => {
+const play = async (
+  key: SoundKey,
+  volume: number,
+  shouldPlay: () => boolean = () => true
+): Promise<boolean> => {
+  if (!shouldPlay()) return false;
   try {
     let s = sounds[key];
     if (!s) {
       s = (await Audio.Sound.createAsync(SOURCES[key], { volume })).sound;
       sounds[key] = s;
     }
+    if (!shouldPlay()) return false;
     await s.setPositionAsync(0);
+    // Loading and seeking can yield long enough for an account reclaim. Do
+    // the final identity guard immediately before native playback is invoked.
+    if (!shouldPlay()) return false;
     await s.playAsync();
+    return true;
   } catch {
     // 静默
+    return shouldPlay();
   }
 };
 
@@ -35,3 +49,8 @@ export const playEncounter = (): void => {
 export const playDissolve = (): void => {
   void play('dissolve', 0.85);
 };
+
+/** 收到新的喜欢事件；与偶遇音效分离，便于后续替换声音或调整音量。 */
+export const playLike = (shouldPlay?: () => boolean): Promise<boolean> => (
+  play('like', 0.45, shouldPlay)
+);

@@ -68,6 +68,29 @@ jobs:
           fi
           echo "OK: $MANIFEST 已包含 usesCleartextTraffic=true"
 
+      - name: 校验后台守候服务与权限已合并
+        shell: bash
+        run: |
+          APP_MANIFEST=client/android/app/src/main/AndroidManifest.xml
+          GUARDIAN_MANIFEST=client/modules/background-guardian/android/src/main/AndroidManifest.xml
+          AUTOLINK_OUTPUT="$(client/node_modules/.bin/expo-modules-autolinking resolve --platform android --project-root client)"
+          grep -Fq '@cidi/background-guardian' <<<"$AUTOLINK_OUTPUT" || {
+            echo "::error::BackgroundGuardian 原生模块未被 Expo autolinking 识别"; exit 1;
+          }
+          grep -Fq '.BackgroundGuardianService' "$GUARDIAN_MANIFEST" || {
+            echo "::error::荣耀兼容的 BackgroundGuardianService 未声明"; exit 1;
+          }
+          grep -Fq 'android.permission.ACCESS_BACKGROUND_LOCATION' "$APP_MANIFEST" || {
+            echo "::error::APK 缺少后台定位权限"; exit 1;
+          }
+          grep -Fq 'android.permission.FOREGROUND_SERVICE_LOCATION' "$APP_MANIFEST" || {
+            echo "::error::APK 缺少 Android 14 定位前台服务权限"; exit 1;
+          }
+          grep -Fq 'android:foregroundServiceType="location"' "$GUARDIAN_MANIFEST" || {
+            echo "::error::守候服务未声明 foregroundServiceType=location"; exit 1;
+          }
+          echo "OK: LocationManager 守候服务已 autolink，后台定位权限已写入原生工程"
+
       - name: 校验自托管热更新配置已写入 APK 原生工程
         shell: bash
         run: |

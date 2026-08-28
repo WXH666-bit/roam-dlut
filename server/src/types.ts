@@ -23,9 +23,34 @@ export interface User {
   recoveryCode?: string;
 }
 
+export type NotificationEventType = 'message_like';
+
+export interface NotificationEvent {
+  /** A monotonically increasing server-side cursor. */
+  id: number;
+  type: NotificationEventType;
+  recipientDeviceId: string;
+  messageId: string;
+  createdAt: number;
+}
+
+export interface LikeResult {
+  added: boolean;
+  notificationEvent: NotificationEvent | null;
+}
+
+export interface PushToken {
+  deviceId: string;
+  token: string;
+  updatedAt: number;
+}
+
 export interface StoreShape {
   users: User[];
   messages: Message[];
+  // Optional on disk so JSON files written by older versions remain readable.
+  notificationEvents?: NotificationEvent[];
+  pushTokens?: PushToken[];
 }
 
 export const isAlive = (

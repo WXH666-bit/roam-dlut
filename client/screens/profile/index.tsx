@@ -10,6 +10,7 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from 'expo-router';
+import Constants from 'expo-constants';
 import { FontAwesome6 } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import dayjs from 'dayjs';
@@ -34,11 +35,12 @@ import {
 // 与服务端 config.ts TTL_DAYS 默认值一致；该值接口未下发，服务端改环境变量时需同步这里
 const MESSAGE_TTL_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const APP_VERSION = Constants.expoConfig?.version ?? '1.1.0';
 
 export default function ProfileScreen() {
   const router = useSafeRouter();
   const handwriting = useHandwritingFont();
-  const { deviceId, user, setUser, demoMode, setDemoMode } = useApp();
+  const { deviceId, deviceToken, user, setUser, demoMode, setDemoMode } = useApp();
   const [data, setData] = useState<UsersMeResponse | null>(null);
   const [loadedAt, setLoadedAt] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -50,11 +52,11 @@ export default function ProfileScreen() {
   const [versionTaps, setVersionTaps] = useState(0);
   const versionTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const load = useCallback(async (idOverride?: string) => {
+  const load = useCallback(async (idOverride?: string, tokenOverride?: string | null) => {
     const id = idOverride ?? deviceId;
     if (!id) return;
     try {
-      const d = await fetchUsersMe(id);
+      const d = await fetchUsersMe(id, idOverride ? tokenOverride : deviceToken);
       setData(d);
       setUser(d.user);
       setLoadedAt(Date.now());
@@ -63,7 +65,7 @@ export default function ProfileScreen() {
     } finally {
       setLoading(false);
     }
-  }, [deviceId, setUser]);
+  }, [deviceId, deviceToken, setUser]);
 
   useFocusEffect(
     useCallback(() => {
@@ -166,7 +168,7 @@ export default function ProfileScreen() {
           {/* 版本号：连点 5 次进入演示模式 */}
           <TouchableOpacity onPress={onVersionTap} activeOpacity={0.6} style={{ marginTop: 44, alignItems: 'center' }}>
             <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.7)', letterSpacing: 1 }}>
-              此地有话 v1.0.0 · 写给陌生人的信
+              此地有话 v{APP_VERSION} · 写给陌生人的信
             </Text>
             {demoMode && <Text style={{ marginTop: 4, fontSize: 11, color: '#F5C26B' }}>演示模式开启中</Text>}
           </TouchableOpacity>
@@ -201,7 +203,7 @@ export default function ProfileScreen() {
           onClose={() => setIdentityOpen(false)}
           onSwitched={(u) => {
             setLoading(true);
-            load(u.device_id);
+            load(u.device_id, u.token);
           }}
         />
       )}

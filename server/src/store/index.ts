@@ -5,7 +5,7 @@
  *
  * 注意：实现按需动态加载，未设 DATABASE_URL 时不会加载 mysql2 连接逻辑。
  */
-import type { Message, User } from '../types';
+import type { LikeResult, Message, NotificationEvent, PushToken, User } from '../types';
 
 export interface DataStore {
   init(): Promise<void>;
@@ -19,7 +19,21 @@ export interface DataStore {
     data: Omit<Message, 'id' | 'createdAt' | 'readers' | 'likes'>
   ): Promise<Message>;
   addReader(messageId: string, deviceId: string): Promise<void>;
-  addLike(messageId: string, deviceId: string): Promise<void>;
+  /** Returns true only when this call inserted a new like. */
+  addLike(messageId: string, deviceId: string): Promise<boolean>;
+  /** Atomically inserts a like and, for a non-author like, its notification event. */
+  addLikeAndCreateNotificationEvent(messageId: string, deviceId: string): Promise<LikeResult>;
+  createNotificationEvent(data: Omit<NotificationEvent, 'id'>): Promise<NotificationEvent>;
+  listNotificationEvents(
+    recipientDeviceId: string,
+    afterId: number,
+    limit?: number,
+    maxId?: number
+  ): Promise<NotificationEvent[]>;
+  getLatestNotificationEventId(recipientDeviceId: string): Promise<number>;
+  registerPushToken(deviceId: string, token: string): Promise<void>;
+  unregisterPushToken(deviceId: string, token: string): Promise<void>;
+  listPushTokens(deviceId: string): Promise<PushToken[]>;
 }
 
 let impl: DataStore | null = null;
@@ -51,3 +65,20 @@ export const addReader = (messageId: string, deviceId: string) =>
   need().addReader(messageId, deviceId);
 export const addLike = (messageId: string, deviceId: string) =>
   need().addLike(messageId, deviceId);
+export const addLikeAndCreateNotificationEvent = (messageId: string, deviceId: string) =>
+  need().addLikeAndCreateNotificationEvent(messageId, deviceId);
+export const createNotificationEvent = (data: Omit<NotificationEvent, 'id'>) =>
+  need().createNotificationEvent(data);
+export const listNotificationEvents = (
+  recipientDeviceId: string,
+  afterId: number,
+  limit?: number,
+  maxId?: number
+) => need().listNotificationEvents(recipientDeviceId, afterId, limit, maxId);
+export const getLatestNotificationEventId = (recipientDeviceId: string) =>
+  need().getLatestNotificationEventId(recipientDeviceId);
+export const registerPushToken = (deviceId: string, token: string) =>
+  need().registerPushToken(deviceId, token);
+export const unregisterPushToken = (deviceId: string, token: string) =>
+  need().unregisterPushToken(deviceId, token);
+export const listPushTokens = (deviceId: string) => need().listPushTokens(deviceId);

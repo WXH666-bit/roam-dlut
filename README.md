@@ -2,7 +2,7 @@
 
 > 把留言藏在校园的真实地理位置上。没有地图，没有提示——只有走到那条留言 50 米以内，它才会浮现。
 
-「此地有话」是一款面向大连理工大学学生的校园地理留言 App（Android）。任何人都可以在某个位置藏下一句话、一张照片或一段视频；每条留言存活 30 天，或被读满 99 人，任一条件到达即永久消散。它是写给陌生人的信、藏在校园里的彩蛋、稍纵即逝的偶遇——机不可失。
+「此地有话」是一款面向大连理工大学学生的校园地理留言 App（Android / iOS）。任何人都可以在某个位置藏下一句话、一张照片或一段视频；每条留言存活 30 天，或被读满 99 人，任一条件到达即永久消散。它是写给陌生人的信、藏在校园里的彩蛋、稍纵即逝的偶遇——机不可失。
 
 ## 核心玩法
 
@@ -10,6 +10,15 @@
 - **偶遇**：走到某条未读留言 50m 内，手机震动、风铃轻响（仅原生端），屏幕浮现一枚发光光点，点开即读
 - **藏言**：在某个有感触的地方，写下 140 字以内的话，可配手绘贴纸、1 张照片或 1 段视频
 - **消散**：存活满 30 天或被读满 99 人（按设备去重），留言永久消散——错过就是错过；读满瞬间，最后一位读者会看到金色光点随风散去的告别动画（仅原生端）
+
+## 后台守候与互动通知
+
+- **Android（含荣耀 90 Pro）**：使用系统 `LocationManager` 的前台守候服务，不依赖 Google Play Services；通知栏会长期保留一条低优先级「正在守候」通知。App 不在前台时，每约 30 秒检查附近未读留言和新的点赞事件。
+- **iOS**：申请「始终允许」定位，使用后台位置更新，并注册最多 20 个最近未读留言的地理围栏；点赞离线通知通过 Expo Push Service / APNs 发送。
+- **隐私**：锁屏通知只携带事件类型和留言 ID，不展示留言正文、坐标或点赞者身份。
+- **系统限制**：Android 被用户在系统设置中“强行停止”或手机重启后，服务必须再次打开 App 才能恢复；iOS 被用户明确强制退出后，系统也可能暂停后台唤醒，需再次打开 App 恢复。
+
+荣耀 / MagicOS 真机首次安装后，建议在系统设置中确认：通知已开启、位置为「始终允许」，并在「应用启动管理 / 电池优化」中允许自启动、关联启动和后台活动。不同 MagicOS 版本的菜单名称可能略有差异。
 
 ## 分享（藏话卡）
 
@@ -34,7 +43,7 @@ Web 端降级：优先 `navigator.share`，不可用时展示预填文案 + 一�
 
 | 端 | 技术 |
 |---|---|
-| App（`client/`） | Expo 54 · React Native · Expo Router · Uniwind(Tailwind v4) · Reanimated |
+| App（`client/`） | Expo 54 · React Native · Expo Router · Android LocationManager 守候 · iOS 后台定位 / APNs |
 | 后端（`server/`） | Express · tsx · 数据层可切换（本地 JSON / MySQL）· 媒体存储可切换（本机磁盘 / 七牛 Kodo）· 自托管签名 Expo Updates |
 | 包管理 | pnpm workspace monorepo |
 
@@ -54,6 +63,8 @@ pnpm dev
 - 后端：`http://localhost:9091`（健康检查 `GET /api/v1/health`）
 - App：`http://localhost:8081`（Expo DevTools；手机装 Expo Go 扫码，或 `pnpm --filter=./client exec expo run:android` 真机运行）
 
+> Expo Go 可调试普通前台页面，但不包含本项目的 Android `BackgroundGuardian` 原生模块；后台守候、常驻通知和完整通知链路必须使用重新构建的开发客户端或安装包验证。
+
 > 后端首次启动会自动播种 40 条校园种子留言（分布在大连理工大学各真实地标附近，含图片与短视频样例）。
 
 ## 开发者模式（演示模式）
@@ -61,7 +72,7 @@ pnpm dev
 偶遇依赖真实 GPS，在模拟器、网页或答辩现场无法走动时，用演示模式虚拟定位：
 
 1. 打开 App，点右上角进入「**我的**」
-2. 滑到页面底部，找到版本号文字「**此地有话 v1.0.0 · 写给陌生人的信**」
+2. 滑到页面底部，找到版本号文字「**此地有话 v1.1.0 · 写给陌生人的信**」
 3. **连续点击版本号 5 次**，开启演示模式
 4. 屏幕右侧出现虚拟定位面板：
    - 顶部显示当前模拟坐标
@@ -102,6 +113,7 @@ pnpm ota:rollback -- --message "回滚说明" # 回滚到 APK 内置版本
 | `QINIU_BUCKET` | — | Kodo 空间名 |
 | `DATABASE_URL` | 内存 + JSON | MySQL 连接串，如 `mysql://user:pass@host:3306/cidi`；设置后数据走 MySQL |
 | `SERVER_SECRET` | 不校验 | 设置后注册接口签发设备 token，开信/点赞须带 `x-device-token` 头（轻量防刷） |
+| `EXPO_ACCESS_TOKEN` | — | 可选；Expo Push Service 开启访问令牌保护后填写，供服务端发送 iOS 点赞通知 |
 
 ## 无对象存储的快速部署（过渡方案）
 
@@ -125,7 +137,7 @@ STORAGE_PROVIDER=local PUBLIC_BASE_URL=http://<公网IP>:9091 pnpm dev
 mysql -h <mysql-host> -u <user> -p <database> < server/migrate.sql
 ```
 
-`migrate.sql` 只做 `CREATE TABLE IF NOT EXISTS`（users / messages / message_readers / message_likes），重复执行安全；首次启动时后端也会自动建表，并**在空库时自动播种 40 条种子留言**。
+`migrate.sql` 以幂等方式维护 users / messages / message_readers / message_likes / notification_events / notification_event_sequence / push_tokens；首次启动时后端也会自动建表，并**在空库时自动播种 40 条种子留言**。
 
 **2. 配置环境变量并启动后端**
 
@@ -164,6 +176,8 @@ cd client
 EXPO_PUBLIC_BACKEND_BASE_URL=http://1.92.120.33:9091 pnpm exec expo run:android --variant release
 ```
 
+iOS 还需在 Expo/EAS 项目中配置 APNs 凭据，并在构建环境提供 `EXPO_PUBLIC_EAS_PROJECT_ID`。当前 HTTP/IP 演示后端会临时放宽 iOS ATS；正式上架前必须切换 HTTPS。
+
 本地开发不用管这一步——`client/.env` 里的 `http://localhost:9091` 就是默认值，代码里也内置了同样的兜底。
 
 ## CI 打包（GitHub Actions 自动出 APK）
@@ -199,12 +213,14 @@ demo 期 APK 用 Expo 模板自带的 debug keystore 签名（能装能跑，应
 | GET | `/messages/:id` | 开信读全文；服务端按 device_id 去重计数，读满即消散 |
 | POST | `/messages` | 发布留言；服务端做敏感词校验 + 每日限额 |
 | POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
+| GET | `/notifications` | 按单调游标拉取本身份的点赞事件（需设备 token） |
+| PUT / DELETE | `/notifications/push-token` | 绑定或解绑 iOS Expo push token（需设备 token） |
 | POST | `/upload` | 图片/视频上传（multipart，≤120MB），返回存储 key 与访问 URL |
 | GET | `/updates/manifest` | Expo Updates 协议 manifest（按平台/runtime 返回签名更新或回滚指令） |
 | GET | `/updates/assets` | 下载 manifest 声明的 bundle、图片和字体资源 |
 | GET | `/updates/health` | 查看 OTA 存储状态与已发布 runtime |
 
-> 服务端设了 `SERVER_SECRET` 时：`POST /users` 响应会多一个 `token` 字段，之后开信与点赞须带请求头 `x-device-token: <token>`，否则 401。App 端已自动处理（注册时保存并回传）。
+> 服务端设了 `SERVER_SECRET` 时：`POST /users` 响应会多一个 `token` 字段，之后开信、点赞、我的数据与通知接口须带请求头 `x-device-token: <token>`，否则 401。App 端已自动处理（注册时保存并回传）。
 
 ## 目录结构
 
@@ -214,6 +230,8 @@ client/                 # Expo App
 ├── screens/            # 页面实现（与路由一一对应）
 ├── components/         # 光点/开信动画/贴纸/夜空背景/演示面板等
 ├── contexts/           # 全局状态（设备、位置、留言缓存）
+├── services/           # 通知、后台定位与 Android 守候编排
+├── modules/            # 本地 Expo 原生模块（荣耀兼容 LocationManager 服务）
 ├── utils/              # API 封装、Haversine、贴纸注册表
 server/                 # 后端
 ├── src/routes/         # users / messages / upload / updates

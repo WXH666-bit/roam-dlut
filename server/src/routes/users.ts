@@ -2,7 +2,7 @@ import { Router } from 'express';
 import { ensureUser, findUserByRecoveryCode, listMessages, renameUser } from '../store';
 import { isAlive } from '../types';
 import { config, TTL_MS } from '../config';
-import { issueToken } from '../auth';
+import { issueToken, tokenValid } from '../auth';
 
 const router = Router();
 
@@ -75,6 +75,9 @@ router.post('/reclaim', async (req, res) => {
 router.get('/me', async (req, res) => {
   const deviceId = String(req.query.device_id || '');
   if (!deviceId) return res.status(400).json({ error: 'device_id required' });
+  if (!tokenValid(deviceId, req.get('x-device-token'))) {
+    return res.status(401).json({ error: 'invalid_token' });
+  }
   const u = await ensureUser(deviceId);
   const now = Date.now();
   const alive = (m: Parameters<typeof isAlive>[0]) => isAlive(m, now, TTL_MS, config.readLimit);

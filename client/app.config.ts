@@ -8,6 +8,8 @@ const backendBaseUrl = (
 const otaUpdateUrl = (
   process.env.EXPO_PUBLIC_OTA_UPDATE_URL || `${backendBaseUrl}/api/v1/updates/manifest`
 ).replace(/\/+$/, '');
+const easProjectId = process.env.EXPO_PUBLIC_EAS_PROJECT_ID;
+const usesInsecureHttpBackend = backendBaseUrl.startsWith('http://');
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
@@ -29,7 +31,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     runtimeVersion: { policy: 'appVersion' },
     "name": "此地有话",
     "slug": "roam-dlut",
-    "version": "1.0.0",
+    "version": "1.1.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "cidi",
@@ -37,7 +39,20 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.roamdlut.cidi"
+      "bundleIdentifier": "com.roamdlut.cidi",
+      "buildNumber": "2",
+      "infoPlist": {
+        "NSLocationWhenInUseUsageDescription": "「此地有话」需要访问您的位置，才能感知附近的留言。",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "允许「此地有话」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
+        "UIBackgroundModes": ["location"],
+        // 当前演示服务器仍是 HTTP/IP 直连；iOS 的 ATS 默认会拦截全部业务请求。
+        // 正式上架前切到 HTTPS，下面的临时放行会随构建环境自动消失。
+        ...(usesInsecureHttpBackend ? {
+          "NSAppTransportSecurity": {
+            "NSAllowsArbitraryLoads": true
+          }
+        } : {})
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -45,10 +60,20 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#0B0E23"
       },
       "package": "com.roamdlut.cidi",
+      "versionCode": 2,
       // 明文流量（usesCleartextTraffic）说明：后端当前为 http://<公网IP>:9091 直连，
       // SDK 54 已移除该 app config 字段的 prebuild 支持，改由 plugins/withCleartextTraffic.js 写入清单；
       // 决赛前若后端切 https，删除该插件即可。
-      "permissions": ["ACCESS_FINE_LOCATION", "ACCESS_COARSE_LOCATION", "VIBRATE"]
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION",
+        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_LOCATION",
+        "POST_NOTIFICATIONS",
+        "VIBRATE",
+        "WAKE_LOCK"
+      ]
     },
     "web": {
       "bundler": "metro",
@@ -58,6 +83,13 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "plugins": [
       "./plugins/withCleartextTraffic",
       "expo-updates",
+      [
+        "expo-notifications",
+        {
+          "color": "#F5C26B",
+          "defaultChannel": "cidi_like"
+        }
+      ],
       process.env.EXPO_PUBLIC_BACKEND_BASE_URL ? [
         "expo-router",
         {
@@ -84,7 +116,11 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "「此地有话」需要访问您的位置，才能感知附近的留言。"
+          "locationWhenInUsePermission": "「此地有话」需要访问您的位置，才能感知附近的留言。",
+          "locationAlwaysAndWhenInUsePermission": "允许「此地有话」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true,
+          "isAndroidForegroundServiceEnabled": true
         }
       ],
       [
@@ -96,6 +132,17 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         }
       ]
     ],
+    ...(easProjectId ? {
+      "extra": {
+        ...config.extra,
+        "eas": {
+          ...(typeof config.extra?.eas === 'object' && config.extra.eas !== null
+            ? config.extra.eas
+            : {}),
+          "projectId": easProjectId
+        }
+      }
+    } : {}),
     "experiments": {
       "typedRoutes": true
     }
