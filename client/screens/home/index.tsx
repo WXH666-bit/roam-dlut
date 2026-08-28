@@ -21,8 +21,8 @@ import { LetterOverlay } from '@/components/LetterOverlay';
 import { DemoPanel } from '@/components/DemoPanel';
 import { useApp } from '@/contexts/AppContext';
 import { useHandwritingFont } from '@/contexts/FontContext';
+import { useOtaUpdatePrompt } from '@/contexts/OtaUpdateContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
-import { useOtaUpdate } from '@/hooks/useOtaUpdate';
 import { haversineMeters } from '@/utils/haversine';
 import { playEncounter, playDissolve } from '@/utils/sound';
 import { DissolveFx } from '@/components/DissolveFx';
@@ -141,7 +141,11 @@ export default function HomeScreen() {
   }, [location, aliveMessages, readIds]);
 
   const waitingText = useMemo(() => (aliveTotal > 0 ? '条留言正在等待' : '条留言刚刚都消散了'), [aliveTotal]);
-  const { status: otaStatus, reload: reloadOta } = useOtaUpdate();
+  const {
+    status: otaStatus,
+    isPromptVisible: otaPromptVisible,
+    openPrompt: openOtaPrompt,
+  } = useOtaUpdatePrompt();
 
   // 首次启动先去引导页；标志位读取中先只铺夜空
   if (onboarded === null) {
@@ -200,30 +204,44 @@ export default function HomeScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* 热更新就绪横幅：仅后台下载完成后出现，绝不自动重启 */}
-        {otaStatus === 'ready' && (
+        {/* 用户暂时忽略更新弹窗后，首页仍保留稍后处理的入口。 */}
+        {otaStatus === 'ready' && !otaPromptVisible && (
           <Animated.View
             entering={FadeIn.duration(500)}
             style={{
               marginTop: 10,
               marginHorizontal: 20,
-              paddingVertical: 8,
-              paddingHorizontal: 14,
-              borderRadius: 12,
-              backgroundColor: 'rgba(255,255,255,0.05)',
+              borderRadius: 14,
+              backgroundColor: 'rgba(245,194,107,0.075)',
               borderWidth: 1,
-              borderColor: 'rgba(245,194,107,0.18)',
-              flexDirection: 'row',
-              alignItems: 'center',
-              justifyContent: 'center',
-              gap: 10,
+              borderColor: 'rgba(245,194,107,0.30)',
+              overflow: 'hidden',
             }}
           >
-            <Text style={{ fontSize: 12, color: 'rgba(237,231,246,0.85)', letterSpacing: 1 }}>已为你更新到新版本</Text>
-            <TouchableOpacity onPress={reloadOta}>
-              <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>立即重启</Text>
+            <TouchableOpacity
+              accessibilityRole="button"
+              accessibilityLabel="新版本已经准备好，查看更新"
+              activeOpacity={0.76}
+              onPress={openOtaPrompt}
+              style={{
+                minHeight: 52,
+                paddingHorizontal: 14,
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 10,
+              }}
+            >
+              <FontAwesome6 name="star" size={13} color="#F5C26B" />
+              <View style={{ flex: 1 }}>
+                <Text style={{ fontSize: 12.5, color: 'rgba(237,231,246,0.92)', letterSpacing: 0.8 }}>
+                  新版本已经准备好
+                </Text>
+                <Text style={{ marginTop: 3, fontSize: 10.5, color: 'rgba(142,139,163,0.78)' }}>
+                  下次启动也会自动生效
+                </Text>
+              </View>
+              <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.8 }}>查看更新 ›</Text>
             </TouchableOpacity>
-            <Text style={{ fontSize: 11, color: 'rgba(142,139,163,0.7)', letterSpacing: 0.5 }}>下次启动生效</Text>
           </Animated.View>
         )}
 

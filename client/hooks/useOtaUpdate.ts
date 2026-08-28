@@ -13,8 +13,13 @@ const RETRY_DELAYS_MS = [2000, 5000, 15000] as const;
  * 启动后检查国内自托管更新源：有更新则后台下载，完成后置 ready 并暴露 reload()。
  * 短时断网会退避重试，回到前台也会补查；所有失败都保留 APK 内置版本，不阻塞使用。
  */
-export function useOtaUpdate(): { status: OtaStatus; reload: () => void } {
+export function useOtaUpdate(): {
+  status: OtaStatus;
+  updateId: string | null;
+  reload: () => Promise<void>;
+} {
   const [status, setStatus] = useState<OtaStatus>('idle');
+  const [updateId, setUpdateId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!OTA_ENABLED || __DEV__ || !Updates.isEnabled) return;
@@ -40,6 +45,7 @@ export function useOtaUpdate(): { status: OtaStatus; reload: () => void } {
         const fetched = await Updates.fetchUpdateAsync();
         if (!cancelled && (fetched.isNew || fetched.isRollBackToEmbedded)) {
           ready = true;
+          setUpdateId(fetched.isNew ? fetched.manifest.id : 'rollback-to-embedded');
           setStatus('ready');
         }
       } catch {
@@ -71,10 +77,12 @@ export function useOtaUpdate(): { status: OtaStatus; reload: () => void } {
     };
   }, []);
 
-  const reload = useCallback(() => {
-    if (!OTA_ENABLED || !Updates.isEnabled) return;
-    Updates.reloadAsync().catch(() => undefined);
+  const reload = useCallback(async () => {
+    if (!OTA_ENABLED || !Updates.isEnabled) {
+      throw new Error('OTA updates are unavailable.');
+    }
+    await Updates.reloadAsync();
   }, []);
 
-  return { status, reload };
+  return { status, updateId, reload };
 }
