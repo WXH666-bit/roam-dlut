@@ -9,7 +9,9 @@
     "lint:client": "pnpm --filter=./client run lint",
     "lint:server": "pnpm --filter=./server run lint",
     "lint:all": "pnpm lint:server && pnpm lint:client",
-    "validate": "pnpm dlx concurrently --group --names expo,server \"pnpm lint:client\" \"pnpm lint:server\""
+    "validate": "pnpm dlx concurrently --group --names expo,server \"pnpm lint:client\" \"pnpm lint:server\"",
+    "ota:export": "node scripts/ota-export.mjs",
+    "ota:rollback": "node scripts/ota-rollback.mjs"
   },
   "dependencies": {},
   "devDependencies": {},

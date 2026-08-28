@@ -6,8 +6,9 @@
     "build": "node build.js",
     "dev": "tsx watch ./src/index.ts",
     "preinstall": "npx only-allow pnpm",
-    "start": "NODE_ENV=production PORT=${PORT:-5000} node dist/index.js",
-    "lint": "tsc --noEmit"
+    "start": "node dist/index.js",
+    "lint": "tsc --noEmit",
+    "test:ota": "tsx --test src/updates/protocol.test.ts"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.1114.0",
@@ -17,13 +18,18 @@
     "dayjs": "^1.11.20",
     "dotenv": "^17.2.3",
     "express": "^4.22.1",
+    "form-data": "^4.0.4",
+    "mime": "^2.6.0",
     "multer": "^2.0.2",
     "mysql2": "^3.23.4",
+    "structured-headers": "^0.4.1",
     "zod": "^4.2.1"
   },
   "devDependencies": {
+    "@expo/multipart-body-parser": "^2.0.0",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@types/mime": "^2.0.3",
     "@types/multer": "^2.0.0",
     "esbuild": "0.27.2",
     "tsx": "^4.21.0",

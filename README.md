@@ -35,7 +35,7 @@ Web 端降级：优先 `navigator.share`，不可用时展示预填文案 + 一�
 | 端 | 技术 |
 |---|---|
 | App（`client/`） | Expo 54 · React Native · Expo Router · Uniwind(Tailwind v4) · Reanimated |
-| 后端（`server/`） | Express · tsx · 数据层可切换（默认内存 + JSON 持久化，设 `DATABASE_URL` 走 MySQL）· 存储层可切换（默认开发态对象存储，设 `STORAGE_PROVIDER=qiniu` 走七牛 Kodo） |
+| 后端（`server/`） | Express · tsx · 数据层可切换（本地 JSON / MySQL）· 媒体存储可切换（本机磁盘 / 七牛 Kodo）· 自托管签名 Expo Updates |
 | 包管理 | pnpm workspace monorepo |
 
 ## 快速开始
@@ -77,6 +77,8 @@ pnpm dev            # 同时起后端(9091) + Expo
 pnpm validate       # 前后端 TypeScript + ESLint 全量检查
 pnpm lint:client    # 仅 App 端检查
 pnpm lint:server    # 仅后端检查
+pnpm ota:export -- --message "更新说明"   # 导出 Android 热更新
+pnpm ota:rollback -- --message "回滚说明" # 回滚到 APK 内置版本
 ```
 
 ## 后端配置（环境变量）
@@ -91,6 +93,9 @@ pnpm lint:server    # 仅后端检查
 | `PORT` | `9091` | 后端监听端口 |
 | `STORAGE_PROVIDER` | 开发态内置存储 | 设为 `qiniu` 时切换为七牛 Kodo（需同时设下方 4 个变量）；设为 `local` 时落盘 `data/uploads/` |
 | `PUBLIC_BASE_URL` | `http://localhost:9091` | 仅 `local` 模式用：媒体 URL 前缀，部署时配 `http://<公网IP>:9091` |
+| `OTA_PUBLIC_BASE_URL` | 跟随请求地址 | OTA manifest 中资源 URL 的公网前缀，当前部署填 `http://1.92.120.33:9091` |
+| `OTA_UPDATES_DIR` | `data/updates` | Expo Updates 导出产物目录；生产机推荐使用绝对路径 |
+| `OTA_PRIVATE_KEY_PATH` | — | OTA RSA 签名私钥绝对路径；启用代码签名的 APK 请求更新时必配，严禁提交 Git |
 | `QINIU_S3_ENDPOINT` | — | Kodo 的 S3 兼容端点，如 `s3.cn-east-1.qiniucs.com`（可不带 `https://`） |
 | `QINIU_ACCESS_KEY` | — | 七牛账号 AK |
 | `QINIU_SECRET_KEY` | — | 七牛账号 SK |
@@ -110,11 +115,11 @@ STORAGE_PROVIDER=local PUBLIC_BASE_URL=http://<公网IP>:9091 pnpm dev
 
 之后切七牛**只改环境变量**（`STORAGE_PROVIDER=qiniu` + 七牛四件套），代码零改动；已落盘的本地文件不会自动迁移。
 
-## 部署到七牛云
+## 部署到普通云服务器
 
-> 目标形态：后端跑在七牛云服务器（Node.js + MySQL + Kodo），App 构建 Release APK 指向公网后端。
+> 当前目标形态：Node.js 后端、媒体文件和 OTA 更新都放在现有云服务器 `1.92.120.33`；不要求 EAS 或七牛云，国内用户不需要梯子。
 
-**1. 建库建表**
+**1. 可选：使用 MySQL 时建库建表**
 
 ```bash
 mysql -h <mysql-host> -u <user> -p <database> < server/migrate.sql
@@ -129,14 +134,16 @@ cd server
 pnpm install
 pnpm build   # 产出 dist/
 
-# 必配（七牛三件套 + 数据库 + 防刷密钥）
-export STORAGE_PROVIDER=qiniu
-export QINIU_S3_ENDPOINT=s3.<区域>.qiniucs.com
-export QINIU_ACCESS_KEY=<七牛AK>
-export QINIU_SECRET_KEY=<七牛SK>
-export QINIU_BUCKET=<空间名>
-export DATABASE_URL=mysql://<user>:<pass>@<mysql-host>:3306/<database>
+# 当前普通云服务器部署
+export STORAGE_PROVIDER=local
+export PUBLIC_BASE_URL=http://1.92.120.33:9091
+export OTA_PUBLIC_BASE_URL=http://1.92.120.33:9091
+export OTA_UPDATES_DIR=/opt/roam-dlut/server/data/updates
+export OTA_PRIVATE_KEY_PATH=/opt/roam-dlut/server/data/ota/keys/private-key.pem
 export SERVER_SECRET=<随机长字符串>   # 如 openssl rand -hex 32
+
+# 可选；不设时继续使用本地 JSON 持久化
+# export DATABASE_URL=mysql://<user>:<pass>@<mysql-host>:3306/<database>
 
 # 可选调参（默认值见上表）
 # export MESSAGE_READ_LIMIT=99 MESSAGE_TTL_DAYS=30 MESSAGE_DAILY_LIMIT=3
@@ -145,16 +152,16 @@ PORT=9091 pnpm start
 ```
 
 注意：
-- `STORAGE_PROVIDER=qiniu` 下后端完全不加载开发态 SDK，离开本开发环境也能跑
-- 上传链路不变：App 仍 `POST /api/v1/upload`（multipart，单文件 ≤120MB，超限返回 413），由服务端中转写入 Kodo；读取时实时生成 7 天有效的签名 URL
+- `STORAGE_PROVIDER=local` 时上传文件落在 `server/data/uploads/`；以后需要时仍可只改环境变量切换七牛 Kodo
+- OTA 文件落在 `server/data/updates/`，由 `/api/v1/updates/*` 提供；私钥只存在部署机和云服务器，APK 仅内置公钥证书
 - `SERVER_SECRET` 一旦上线就不要再改，否则所有已安装设备的 token 立即失效
+- 完整的首次部署、日常上传和回滚步骤见 [`docs/热更推送手册.md`](./docs/热更推送手册.md)
 
 **3. 构建 App（指向公网后端）**
 
 ```bash
 cd client
-EXPO_PUBLIC_BACKEND_BASE_URL=https://<你的后端域名> pnpm exec expo run:android --variant release
-# 或用 EAS：EXPO_PUBLIC_BACKEND_BASE_URL=https://<你的后端域名> eas build -p android
+EXPO_PUBLIC_BACKEND_BASE_URL=http://1.92.120.33:9091 pnpm exec expo run:android --variant release
 ```
 
 本地开发不用管这一步——`client/.env` 里的 `http://localhost:9091` 就是默认值，代码里也内置了同样的兜底。
@@ -193,6 +200,9 @@ demo 期 APK 用 Expo 模板自带的 debug keystore 签名（能装能跑，应
 | POST | `/messages` | 发布留言；服务端做敏感词校验 + 每日限额 |
 | POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
 | POST | `/upload` | 图片/视频上传（multipart，≤120MB），返回存储 key 与访问 URL |
+| GET | `/updates/manifest` | Expo Updates 协议 manifest（按平台/runtime 返回签名更新或回滚指令） |
+| GET | `/updates/assets` | 下载 manifest 声明的 bundle、图片和字体资源 |
+| GET | `/updates/health` | 查看 OTA 存储状态与已发布 runtime |
 
 > 服务端设了 `SERVER_SECRET` 时：`POST /users` 响应会多一个 `token` 字段，之后开信与点赞须带请求头 `x-device-token: <token>`，否则 401。App 端已自动处理（注册时保存并回传）。
 
@@ -206,12 +216,14 @@ client/                 # Expo App
 ├── contexts/           # 全局状态（设备、位置、留言缓存）
 ├── utils/              # API 封装、Haversine、贴纸注册表
 server/                 # 后端
-├── src/routes/         # users / messages / upload
+├── src/routes/         # users / messages / upload / updates
+├── src/updates/        # 自托管 Expo Updates 协议、签名、资源校验与测试
 ├── src/seeds.ts        # 40 条种子留言
 ├── src/store/          # 数据层（index=接口与切换, memoryStore, mysqlStore）
 ├── src/storage/        # 存储层（index=接口与切换, cozeProvider, qiniuProvider）
 ├── src/auth.ts         # 设备 token 签发与校验（SERVER_SECRET 开关）
-└── migrate.sql         # MySQL 建表脚本（部署七牛时执行）
+└── migrate.sql         # 可选 MySQL 建表脚本
+scripts/                # OTA 导出、原子发布与回滚脚本
 ```
 
 ## 设计文档

@@ -1,3 +1,4 @@
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import { mkdirSync } from "node:fs";
@@ -6,6 +7,7 @@ import { LOCAL_UPLOADS_DIR } from "./storage/localProvider";
 import usersRouter from "./routes/users";
 import messagesRouter from "./routes/messages";
 import uploadRouter from "./routes/upload";
+import updatesRouter from "./routes/updates";
 
 const app = express();
 const port = process.env.PORT || 9091;
@@ -22,6 +24,7 @@ app.get('/api/v1/health', (req, res) => {
 app.use('/api/v1/users', usersRouter);
 app.use('/api/v1/messages', messagesRouter);
 app.use('/api/v1/upload', uploadRouter);
+app.use('/api/v1/updates', updatesRouter);
 
 // STORAGE_PROVIDER=local 时媒体文件从此处暴露（express.static 自带 Range 支持，视频可拖进度条）
 mkdirSync(LOCAL_UPLOADS_DIR, { recursive: true });

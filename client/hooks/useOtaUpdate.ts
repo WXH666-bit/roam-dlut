@@ -1,41 +1,78 @@
 import { useCallback, useEffect, useState } from 'react';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import * as Updates from 'expo-updates';
 
 /** 用户可见态：idle=无更新或检查中（不提示）；ready=新包已下载，可随时重启生效 */
 export type OtaStatus = 'idle' | 'ready';
 
-// expo-updates 在 web 无原生实现（import 安全、调用会抛），web 端整体短路
+// expo-updates 在 web 无原生实现（import 安全、调用会抛），web 端整体短路。
 const OTA_ENABLED = Platform.OS !== 'web';
+const RETRY_DELAYS_MS = [2000, 5000, 15000] as const;
 
 /**
- * 启动 2 秒后检查 EAS Update：有更新则后台静默下载，完成后置 ready 并暴露 reload()。
- * 一切失败路径（无网/无更新/未配置 projectId/原生库缺失）全部静默，绝不阻塞使用。
+ * 启动后检查国内自托管更新源：有更新则后台下载，完成后置 ready 并暴露 reload()。
+ * 短时断网会退避重试，回到前台也会补查；所有失败都保留 APK 内置版本，不阻塞使用。
  */
 export function useOtaUpdate(): { status: OtaStatus; reload: () => void } {
   const [status, setStatus] = useState<OtaStatus>('idle');
 
   useEffect(() => {
-    if (!OTA_ENABLED || __DEV__) return;
+    if (!OTA_ENABLED || __DEV__ || !Updates.isEnabled) return;
     let cancelled = false;
-    const timer = setTimeout(async () => {
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
+    let checking = false;
+    let ready = false;
+    let lastAttemptAt = 0;
+
+    const schedule = (attempt: number, delay: number) => {
+      if (cancelled || ready) return;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = setTimeout(() => void check(attempt), delay);
+    };
+
+    const check = async (attempt: number) => {
+      if (cancelled || ready || checking) return;
+      checking = true;
+      lastAttemptAt = Date.now();
       try {
-        const check = await Updates.checkForUpdateAsync();
-        if (cancelled || !check.isAvailable) return;
+        const result = await Updates.checkForUpdateAsync();
+        if (cancelled || (!result.isAvailable && !result.isRollBackToEmbedded)) return;
         const fetched = await Updates.fetchUpdateAsync();
-        if (!cancelled && fetched.isNew) setStatus('ready');
+        if (!cancelled && (fetched.isNew || fetched.isRollBackToEmbedded)) {
+          ready = true;
+          setStatus('ready');
+        }
       } catch {
-        // 静默：热更是增量能力，失败时 App 行为与未接入一致
+        const nextAttempt = attempt + 1;
+        if (nextAttempt < RETRY_DELAYS_MS.length) {
+          schedule(nextAttempt, RETRY_DELAYS_MS[nextAttempt]);
+        }
+      } finally {
+        checking = false;
       }
-    }, 2000);
+    };
+
+    schedule(0, RETRY_DELAYS_MS[0]);
+    const appStateSubscription = AppState.addEventListener('change', (nextState) => {
+      if (
+        nextState === 'active' &&
+        !ready &&
+        !checking &&
+        Date.now() - lastAttemptAt >= 30_000
+      ) {
+        schedule(0, 500);
+      }
+    });
+
     return () => {
       cancelled = true;
-      clearTimeout(timer);
+      if (retryTimer) clearTimeout(retryTimer);
+      appStateSubscription.remove();
     };
   }, []);
 
   const reload = useCallback(() => {
-    if (!OTA_ENABLED) return;
+    if (!OTA_ENABLED || !Updates.isEnabled) return;
     Updates.reloadAsync().catch(() => undefined);
   }, []);
 

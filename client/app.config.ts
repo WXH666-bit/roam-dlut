@@ -1,31 +1,32 @@
 import { ExpoConfig, ConfigContext } from 'expo/config';
-import { readFileSync } from 'node:fs';
-import { join } from 'node:path';
 
-// EAS Update 热更新开关：唯一的 ID 维护点是 eas.json 的 projectId。
-// 占位符未替换或读取失败时不注入 updates 配置，APK 行为与接入前完全一致（无热更）。
-const easProjectId = ((): string | null => {
-  try {
-    const parsed = JSON.parse(readFileSync(join(__dirname, 'eas.json'), 'utf8')) as { projectId?: string };
-    const id = parsed.projectId?.trim();
-    return id && id !== 'TODO_EAS_PROJECT_ID' ? id : null;
-  } catch {
-    return null;
-  }
-})();
+// 自托管 OTA 与业务 API 默认共用国内云服务器；有 HTTPS/CDN 域名后可单独覆盖更新源。
+// 该 URL 会写进原生 APK，修改后必须重新打一次基座包。
+const backendBaseUrl = (
+  process.env.EXPO_PUBLIC_BACKEND_BASE_URL || 'http://localhost:9091'
+).replace(/\/+$/, '');
+const otaUpdateUrl = (
+  process.env.EXPO_PUBLIC_OTA_UPDATE_URL || `${backendBaseUrl}/api/v1/updates/manifest`
+).replace(/\/+$/, '');
 
 export default ({ config }: ConfigContext): ExpoConfig => {
   return {
     ...config,
-    ...(easProjectId
-      ? {
-          updates: { url: `https://u.expo.dev/${easProjectId}` },
-          // runtimeVersion 用 appVersion 策略，绑定本文件的 version 字段：
-          // 每次原生层改动（新增/升级原生依赖、改权限、改 gradle）必须把 version 从 1.0.0 递增，
-          // 否则热更会推到不兼容的原生层上。
-          runtimeVersion: { policy: 'appVersion' },
-        }
-      : {}),
+    updates: {
+      enabled: true,
+      url: otaUpdateUrl,
+      // 正常检查由 useOtaUpdate 负责并显示“立即重启”；崩溃恢复仍交给原生层兜底。
+      checkAutomatically: 'ON_ERROR_RECOVERY',
+      fallbackToCacheTimeout: 0,
+      // 私钥只放在发布机和云服务器；APK 只内置公钥证书来拒绝被篡改的更新。
+      codeSigningCertificate: './certs/certificate.pem',
+      codeSigningMetadata: {
+        keyid: 'main',
+        alg: 'rsa-v1_5-sha256',
+      },
+    },
+    // 每次原生层改动（原生依赖、权限、Gradle、SDK）必须递增 version，隔离不兼容 OTA。
+    runtimeVersion: { policy: 'appVersion' },
     "name": "此地有话",
     "slug": "roam-dlut",
     "version": "1.0.0",
@@ -56,6 +57,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     "plugins": [
       "./plugins/withCleartextTraffic",
+      "expo-updates",
       process.env.EXPO_PUBLIC_BACKEND_BASE_URL ? [
         "expo-router",
         {
