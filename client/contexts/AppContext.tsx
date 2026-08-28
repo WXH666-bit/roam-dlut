@@ -141,8 +141,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     removeExpoWatch(watchRef.current);
     watchRef.current = null;
     if (geoWatchIdRef.current !== null) {
-      Geolocation.clearWatch(geoWatchIdRef.current);
+      const watchId = geoWatchIdRef.current;
       geoWatchIdRef.current = null;
+      try {
+        Geolocation.clearWatch(watchId);
+      } catch {
+        // 原生模块异常时仍要继续清理下面的 timer/watchdog。
+      }
     }
     if (fallbackTimerRef.current) {
       clearTimeout(fallbackTimerRef.current);
@@ -154,25 +159,36 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // 定位全流程：expo-location 主引擎；Android 上 8 秒无坐标则切备用引擎
+  // 定位全流程：expo-location 主引擎；Android 上权限通过后 8 秒无坐标则切备用引擎
   // （华为/荣耀国行无 GMS，expo-location 的 FusedLocationProvider 不回调，
   //  react-native-geolocation-service 的 forceLocationManager 走系统 LocationManager 兜底）
   const startLocation = useCallback(async () => {
     const run = ++locationRunRef.current;
     const stale = () => run !== locationRunRef.current;
+    // 主引擎的任一原生 Promise 都可能在无 GMS 设备上不返回；fallback 一旦接管，
+    // 即使这些 Promise 之后才恢复，也不能再重新挂回 expo watch。
+    let fallbackStarted = false;
     stopLocationEngines();
     setLocationStatus('locating');
     setLocationAccuracy(null);
 
-    const onFix = (lat: number, lng: number, accuracy: number | null) => {
+    const onFix = (
+      lat: number,
+      lng: number,
+      accuracy: number | null,
+      source: 'last-known' | 'expo-watch' | 'fallback'
+    ) => {
+      // fallback 接管后拒绝已排队的 GMS 回调，避免它们把状态抢回去并误清 watchdog。
+      if (stale() || (fallbackStarted && source !== 'fallback')) return;
       setGpsLocation({ lat, lng });
       setLocationAccuracy(accuracy);
       setLocationStatus('ready');
-      if (fallbackTimerRef.current) {
+      // 缓存坐标只用于快速展示，不能证明主 watch 可用；必须等实时回调后才取消切换。
+      if (source === 'expo-watch' && fallbackTimerRef.current) {
         clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
-      if (fallbackWatchdogRef.current) {
+      if (source === 'fallback' && fallbackWatchdogRef.current) {
         clearTimeout(fallbackWatchdogRef.current);
         fallbackWatchdogRef.current = null;
       }
@@ -180,7 +196,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
     // 备用引擎：停 expo watch，强制走系统 LocationManager（终态交给 onError 判定）
     const startFallbackEngine = () => {
-      if (stale()) return;
+      if (stale() || fallbackStarted) return;
+      fallbackStarted = true;
       // 清旧切换定时器与旧看门狗，防止 catch 路径与定时器路径先后触发
       if (fallbackTimerRef.current) {
         clearTimeout(fallbackTimerRef.current);
@@ -192,42 +209,67 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
       removeExpoWatch(watchRef.current);
       watchRef.current = null;
-      geoWatchIdRef.current = Geolocation.watchPosition(
-        (pos) => onFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null),
-        (err) => {
-          if (stale()) return;
-          // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
-          if (err.code === 1) setLocationStatus('denied');
-          else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
-        },
-        {
-          enableHighAccuracy: true,
-          distanceFilter: 10,
-          interval: 5000,
-          forceLocationManager: true,
-        }
-      );
       // JS 看门狗：15 秒无 fix 置 unavailable；订阅保持，真实 fix 到达时 onFix 自动翻回 ready
       fallbackWatchdogRef.current = setTimeout(() => {
         if (stale()) return;
         setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
       }, 15000);
-      // 首拍缓存：并行 getCurrentPosition，命中系统 LocationManager 缓存可秒回
-      Geolocation.getCurrentPosition(
-        (pos) => {
-          if (stale()) return;
-          onFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null);
-        },
-        () => {
-          // 静默忽略，状态出口只有看门狗和 watch 的 onError，避免双写竞争
-        },
-        {
-          timeout: 15000,
-          maximumAge: 600000,
-          enableHighAccuracy: true,
-          forceLocationManager: true,
+      try {
+        geoWatchIdRef.current = Geolocation.watchPosition(
+          (pos) => onFix(
+            pos.coords.latitude,
+            pos.coords.longitude,
+            pos.coords.accuracy ?? null,
+            'fallback'
+          ),
+          (err) => {
+            if (stale()) return;
+            // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
+            if (err.code === 1) setLocationStatus('denied');
+            else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+          },
+          {
+            enableHighAccuracy: true,
+            distanceFilter: 10,
+            interval: 5000,
+            forceLocationManager: true,
+          }
+        );
+      } catch (e) {
+        // Expo Go、旧 APK 或原生模块未正确链接时可能同步抛错；不能继续卡在 locating。
+        console.warn('[app] fallback location start failed:', e);
+        if (fallbackWatchdogRef.current) {
+          clearTimeout(fallbackWatchdogRef.current);
+          fallbackWatchdogRef.current = null;
         }
-      );
+        if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+        return;
+      }
+      // 首拍缓存：并行 getCurrentPosition，命中系统 LocationManager 缓存可秒回
+      try {
+        Geolocation.getCurrentPosition(
+          (pos) => {
+            if (stale()) return;
+            onFix(
+              pos.coords.latitude,
+              pos.coords.longitude,
+              pos.coords.accuracy ?? null,
+              'fallback'
+            );
+          },
+          () => {
+            // 静默忽略，状态出口只有看门狗和 watch 的 onError，避免双写竞争
+          },
+          {
+            timeout: 15000,
+            maximumAge: 600000,
+            enableHighAccuracy: true,
+            forceLocationManager: true,
+          }
+        );
+      } catch {
+        // watch 与 JS 看门狗仍在运行；首拍失败不改变终态出口。
+      }
     };
 
     try {
@@ -237,30 +279,44 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLocationStatus('denied');
         return;
       }
+      // 必须在任何 GMS 定位调用之前启动。华为/荣耀上 getLastKnownPositionAsync 本身
+      // 就可能永久 pending，若等它返回后再设定时器，备用引擎永远不会启动。
+      if (Platform.OS === 'android') {
+        fallbackTimerRef.current = setTimeout(startFallbackEngine, 8000);
+      } else if (Platform.OS === 'ios') {
+        // iOS 无 GMS 问题，超时仅提示；主引擎晚到的回调仍可把状态翻回 ready。
+        fallbackTimerRef.current = setTimeout(() => {
+          if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+        }, 8000);
+      }
       const last = await Location.getLastKnownPositionAsync();
-      if (stale()) return;
-      if (last) onFix(last.coords.latitude, last.coords.longitude, last.coords.accuracy ?? null);
+      if (stale() || fallbackStarted) return;
+      if (last) {
+        onFix(
+          last.coords.latitude,
+          last.coords.longitude,
+          last.coords.accuracy ?? null,
+          'last-known'
+        );
+      }
       const sub = await Location.watchPositionAsync(
         {
           accuracy: Location.Accuracy.Balanced,
           timeInterval: 5000,
           distanceInterval: 10,
         },
-        (pos) => onFix(pos.coords.latitude, pos.coords.longitude, pos.coords.accuracy ?? null)
+        (pos) => onFix(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          pos.coords.accuracy ?? null,
+          'expo-watch'
+        )
       );
-      if (stale()) {
+      if (stale() || fallbackStarted) {
         removeExpoWatch(sub);
         return;
       }
       watchRef.current = sub;
-      if (Platform.OS === 'android') {
-        fallbackTimerRef.current = setTimeout(startFallbackEngine, 8000);
-      } else if (Platform.OS === 'ios') {
-        // iOS 无 GMS 问题，备用引擎不启用；超时仅提示，watch 回调仍可把状态翻回 ready
-        fallbackTimerRef.current = setTimeout(() => {
-          if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
-        }, 8000);
-      }
     } catch (e) {
       console.warn('[app] location start failed:', e);
       if (stale()) return;
