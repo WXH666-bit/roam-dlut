@@ -29,9 +29,9 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     },
     // 每次原生层改动（原生依赖、权限、Gradle、SDK）必须递增 version，隔离不兼容 OTA。
     runtimeVersion: { policy: 'appVersion' },
-    "name": "此地有话",
+    "name": "Here",
     "slug": "roam-dlut",
-    "version": "1.1.0",
+    "version": "1.2.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "cidi",
@@ -40,10 +40,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.roamdlut.cidi",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "infoPlist": {
-        "NSLocationWhenInUseUsageDescription": "「此地有话」需要访问您的位置，才能感知附近的留言。",
-        "NSLocationAlwaysAndWhenInUseUsageDescription": "允许「此地有话」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
+        "NSLocationWhenInUseUsageDescription": "「Here」需要访问您的位置，才能感知附近的留言。",
+        "NSLocationAlwaysAndWhenInUseUsageDescription": "允许「Here」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
         "UIBackgroundModes": ["location"],
         // 当前演示服务器仍是 HTTP/IP 直连；iOS 的 ATS 默认会拦截全部业务请求。
         // 正式上架前切到 HTTPS，下面的临时放行会随构建环境自动消失。
@@ -57,10 +57,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
-        "backgroundColor": "#0B0E23"
+        "backgroundColor": "#EEDBB3"
       },
       "package": "com.roamdlut.cidi",
-      "versionCode": 2,
+      "versionCode": 3,
       // 明文流量（usesCleartextTraffic）说明：后端当前为 http://<公网IP>:9091 直连，
       // SDK 54 已移除该 app config 字段的 prebuild 支持，改由 plugins/withCleartextTraffic.js 写入清单；
       // 决赛前若后端切 https，删除该插件即可。
@@ -102,22 +102,22 @@ export default ({ config }: ConfigContext): ExpoConfig => {
           "image": "./assets/images/splash-icon.png",
           "imageWidth": 200,
           "resizeMode": "contain",
-          "backgroundColor": "#0B0E23"
+          "backgroundColor": "#EEDBB3"
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "允许「此地有话」访问您的相册，以便您为留言配上照片。",
-          "cameraPermission": "允许「此地有话」使用您的相机，以便您直接拍摄照片上传。",
-          "microphonePermission": "允许「此地有话」访问您的麦克风，以便您拍摄带有声音的视频。"
+          "photosPermission": "允许「Here」访问您的相册，以便您为留言配上照片。",
+          "cameraPermission": "允许「Here」使用您的相机，以便您直接拍摄照片上传。",
+          "microphonePermission": "允许「Here」访问您的麦克风，以便您拍摄带有声音的视频。"
         }
       ],
       [
         "expo-location",
         {
-          "locationWhenInUsePermission": "「此地有话」需要访问您的位置，才能感知附近的留言。",
-          "locationAlwaysAndWhenInUsePermission": "允许「此地有话」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
+          "locationWhenInUsePermission": "「Here」需要访问您的位置，才能感知附近的留言。",
+          "locationAlwaysAndWhenInUsePermission": "允许「Here」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
           "isIosBackgroundLocationEnabled": true,
           "isAndroidBackgroundLocationEnabled": true,
           "isAndroidForegroundServiceEnabled": true
@@ -126,8 +126,8 @@ export default ({ config }: ConfigContext): ExpoConfig => {
       [
         "expo-camera",
         {
-          "cameraPermission": "「此地有话」需要访问相机以拍摄照片和视频。",
-          "microphonePermission": "「此地有话」需要访问麦克风以录制视频声音。",
+          "cameraPermission": "「Here」需要访问相机以拍摄照片和视频。",
+          "microphonePermission": "「Here」需要访问麦克风以录制视频声音。",
           "recordAudioAndroid": true
         }
       ]

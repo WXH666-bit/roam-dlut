@@ -13,7 +13,7 @@ export interface ShareSecretOptions {
 export async function shareSecretCard({ prefillText }: ShareSecretOptions): Promise<ShareResult> {
   if (typeof navigator !== 'undefined' && typeof navigator.share === 'function') {
     try {
-      await navigator.share({ title: '此地有话', text: prefillText });
+      await navigator.share({ title: 'Here', text: prefillText });
     } catch {
       // 用户取消或分享失败：静默
     }

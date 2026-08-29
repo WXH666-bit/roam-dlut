@@ -1,4 +1,4 @@
--- 此地有话 · MySQL 建表脚本（七牛云数据库一键执行）
+-- Here · MySQL 建表脚本（七牛云数据库一键执行）
 -- 与 server/src/store/mysqlStore.ts 的 init() 等价；字符集 utf8mb4 支持贴纸占位符与表情
 
 CREATE TABLE IF NOT EXISTS users (

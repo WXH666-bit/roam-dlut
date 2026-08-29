@@ -185,7 +185,7 @@ export default function HomeScreen() {
             )}
           </View>
           <Text style={{ color: 'rgba(237,231,246,0.5)', fontSize: 13, letterSpacing: 4, fontFamily: handwriting }}>
-            此地有话
+            Here
           </Text>
           <TouchableOpacity
             onPress={() => router.push('/profile')}

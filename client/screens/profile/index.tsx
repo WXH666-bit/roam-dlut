@@ -35,7 +35,7 @@ import {
 // 与服务端 config.ts TTL_DAYS 默认值一致；该值接口未下发，服务端改环境变量时需同步这里
 const MESSAGE_TTL_DAYS = 30;
 const DAY_MS = 24 * 60 * 60 * 1000;
-const APP_VERSION = Constants.expoConfig?.version ?? '1.1.0';
+const APP_VERSION = Constants.expoConfig?.version ?? '1.2.0';
 
 export default function ProfileScreen() {
   const router = useSafeRouter();
@@ -168,7 +168,7 @@ export default function ProfileScreen() {
           {/* 版本号：连点 5 次进入演示模式 */}
           <TouchableOpacity onPress={onVersionTap} activeOpacity={0.6} style={{ marginTop: 44, alignItems: 'center' }}>
             <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.7)', letterSpacing: 1 }}>
-              此地有话 v{APP_VERSION} · 写给陌生人的信
+              Here v{APP_VERSION} · 写给陌生人的信
             </Text>
             {demoMode && <Text style={{ marginTop: 4, fontSize: 11, color: '#F5C26B' }}>演示模式开启中</Text>}
           </TouchableOpacity>

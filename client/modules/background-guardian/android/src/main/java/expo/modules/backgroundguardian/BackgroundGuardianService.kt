@@ -570,7 +570,7 @@ class BackgroundGuardianService : Service() {
     }
     val notification = builder
       .setSmallIcon(smallIcon())
-      .setContentTitle("此地有话正在守候")
+      .setContentTitle("Here 正在守候")
       .setContentText("正在守候附近留言和互动")
       .setContentIntent(appPendingIntent(null, null))
       .setOngoing(true)

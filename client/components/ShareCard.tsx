@@ -65,7 +65,7 @@ export const ShareCard = forwardRef<View, Props>(function ShareCard({ flowerName
         <Text style={styles.subtitle}>走近 50 米，才能遇见它</Text>
         <View style={{ flex: 1 }} />
         <Text style={styles.footer}>
-          {flowerName} · {dateText} · 「此地有话」
+          {flowerName} · {dateText} · Here
         </Text>
       </View>
     </View>

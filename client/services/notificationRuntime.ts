@@ -133,8 +133,8 @@ export const showLocalNotification = async (args: {
           ? (likeCount > 1 ? `你的留言收到了 ${likeCount} 个新赞` : '有人喜欢了你的留言')
           : '附近有一封留言',
         body: args.type === 'message_like'
-          ? '打开「此地有话」看看。'
-          : '走近一些，打开「此地有话」看看。',
+          ? '打开「Here」看看。'
+          : '走近一些，打开「Here」看看。',
         sound: args.playSound ? 'default' : undefined,
         data: {
           type: args.type,

@@ -72,7 +72,7 @@ const requestBackgroundLocation = async (): Promise<boolean> => {
     if (Platform.OS === 'android' && Number(Platform.Version) >= 30) {
       const confirmed = await waitForChoice(
         '允许后台守候',
-        '为了在你暂时离开「此地有话」时发现 50 米内的留言，请在接下来的系统页面中选择“始终允许”。不想开启也不影响正常使用。'
+        '为了在你暂时离开「Here」时发现 50 米内的留言，请在接下来的系统页面中选择“始终允许”。不想开启也不影响正常使用。'
       );
       if (!confirmed) return false;
       background = await Location.requestBackgroundPermissionsAsync();

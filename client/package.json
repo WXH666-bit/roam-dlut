@@ -1,6 +1,6 @@
 {
   "name": "roam-dlut-client",
-  "description": "此地有话 · 校园地理留言 App",
+  "description": "Here · 校园地理留言 App",
   "main": "expo-router/entry",
   "private": true,
   "scripts": {
@@ -106,5 +106,5 @@
     "typescript-eslint": "^8.32.1",
     "uniwind": "^1.2.7"
   },
-  "version": "1.1.0"
+  "version": "1.2.0"
 }
