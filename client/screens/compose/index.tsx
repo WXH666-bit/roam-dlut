@@ -26,6 +26,11 @@ import { useApp } from '@/contexts/AppContext';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import { publishMessage, uploadMedia } from '@/utils/api';
+import {
+  isFreshLiveLocation,
+  LOCATION_COORDINATE_SYSTEM,
+  LOCATION_MAX_ACCURACY_METERS,
+} from '@/utils/location';
 import { STICKERS, stickerToken } from '@/utils/stickers';
 import type { MessageMediaType } from '@/utils/messageTypes';
 
@@ -45,7 +50,27 @@ interface PickedMedia {
 export default function ComposeScreen() {
   const router = useSafeRouter();
   const handwriting = useHandwritingFont();
-  const { deviceId, location, locationAccuracy, locationStatus, retryLocation, demoMode, refreshMessages, user } = useApp();
+  const {
+    deviceId,
+    location,
+    locationFix,
+    getLatestLocationFix,
+    locationAccuracy,
+    locationIsLive,
+    locationStatus,
+    retryLocation,
+    demoMode,
+    refreshMessages,
+    user,
+  } = useApp();
+
+  // The media upload is asynchronous.  Keep refs in sync so the final publish
+  // uses the newest fix rather than the timestamp captured when the screen
+  // rendered or when the upload began.
+  const latestLocationRef = useRef(location);
+  const latestDemoModeRef = useRef(demoMode);
+  latestLocationRef.current = location;
+  latestDemoModeRef.current = demoMode;
 
   const [text, setText] = useState('');
   const [media, setMedia] = useState<PickedMedia | null>(null);
@@ -158,8 +183,19 @@ export default function ComposeScreen() {
       Toast.show({ type: 'info', text1: '说点什么吧，哪怕一句也好' });
       return;
     }
-    if (!location) {
+    const initialDemoMode = latestDemoModeRef.current;
+    const initialFix = getLatestLocationFix();
+    const initialLocation = initialDemoMode
+      ? latestLocationRef.current
+      : initialFix
+        ? { lat: initialFix.lat, lng: initialFix.lng }
+        : null;
+    if (!initialLocation) {
       Toast.show({ type: 'error', text1: '还没有找到你的位置，等定位好了再藏' });
+      return;
+    }
+    if (!initialDemoMode && !isFreshLiveLocation(initialFix)) {
+      Toast.show({ type: 'error', text1: '定位还不够新或不够准（需实时且精度≤30米）' });
       return;
     }
     setPublishing(true);
@@ -171,13 +207,40 @@ export default function ComposeScreen() {
         mediaType = media.kind;
         mediaKey = uploaded.key;
       }
+
+      // Uploading a video can take long enough for the original fix to age
+      // out.  Re-read both refs immediately before sending the coordinates.
+      const currentDemoMode = latestDemoModeRef.current;
+      const currentFix = getLatestLocationFix();
+      const currentLocation = currentDemoMode
+        ? latestLocationRef.current
+        : currentFix
+          ? { lat: currentFix.lat, lng: currentFix.lng }
+          : null;
+      if (!currentLocation || (!currentDemoMode && !isFreshLiveLocation(currentFix))) {
+        throw new Error('location_unusable');
+      }
+      // Demo coordinates are local-only test data.  Keep their wire shape
+      // complete as well; real publishes always use the current fix metadata.
+      const locationMetadata = currentDemoMode
+        ? {
+          coordinateSystem: LOCATION_COORDINATE_SYSTEM,
+          accuracy: 0,
+          capturedAt: Date.now(),
+        }
+        : {
+          coordinateSystem: currentFix?.coordinateSystem ?? LOCATION_COORDINATE_SYSTEM,
+          accuracy: currentFix?.accuracy ?? 0,
+          capturedAt: currentFix?.timestamp ?? Date.now(),
+        };
       await publishMessage({
         deviceId,
         text: text.trim(),
         mediaType,
         mediaKey,
-        lat: location.lat,
-        lng: location.lng,
+        lat: currentLocation.lat,
+        lng: currentLocation.lng,
+        ...locationMetadata,
       });
       await refreshMessages();
       Toast.show({ type: 'success', text1: '已藏在此地，等一个路过的人。' });
@@ -185,11 +248,13 @@ export default function ComposeScreen() {
     } catch (e) {
       const raw = e instanceof Error ? e.message : '';
       const msg =
-        raw === 'file_too_large'
-          ? media?.kind === 'video'
-            ? '视频太大了，试试录短一点'
-            : '这张图片太大了，换一张试试'
-          : raw || '没藏成功，再试一次';
+        raw === 'location_unusable'
+          ? '定位已过期或精度不足，等实时定位（精度≤30米）再藏'
+          : raw === 'file_too_large'
+            ? media?.kind === 'video'
+              ? '视频太大了，试试录短一点'
+              : '这张图片太大了，换一张试试'
+            : raw || '没藏成功，再试一次';
       Toast.show({ type: 'error', text1: msg });
     } finally {
       setPublishing(false);
@@ -375,17 +440,29 @@ export default function ComposeScreen() {
                 ? `虚拟位置 · ${location.lat.toFixed(6)}, ${location.lng.toFixed(6)}`
                 : '还没找到你的位置，去演示模式设置虚拟位置'}
             </Text>
-          ) : locationStatus === 'ready' && location ? (
+          ) : locationStatus === 'ready' && location && locationIsLive ? (
             <>
               <Text style={{ fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
                 已定位 · {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
               </Text>
-              {locationAccuracy !== null && locationAccuracy >= 50 && (
+              {locationAccuracy === null ? (
                 <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
-                  定位精度约±{Math.round(locationAccuracy)}米 · 建议到开阔处
+                  定位精度未知 · 需要实时高精度定位
                 </Text>
-              )}
+              ) : locationAccuracy > LOCATION_MAX_ACCURACY_METERS ? (
+                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+                  定位精度约±{Math.round(locationAccuracy)}米 · 需≤30米才能发布
+                </Text>
+              ) : !isFreshLiveLocation(locationFix) ? (
+                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+                  实时定位已过期 · 正在更新
+                </Text>
+              ) : null}
             </>
+          ) : locationStatus === 'ready' && location ? (
+            <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+              位置缓存 · 正在获取实时定位（实时且精度≤30米后才能发布）
+            </Text>
           ) : locationStatus === 'locating' ? (
             <Text style={{ fontSize: 12, color: '#F2A7C8', letterSpacing: 0.5 }}>定位中…</Text>
           ) : locationStatus === 'denied' ? (

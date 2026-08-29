@@ -9,14 +9,16 @@ import type {
   StoreShape,
   User,
 } from '../types';
-import { buildSeedMessages } from '../seeds';
+import { BUILT_IN_SEED_MESSAGE_IDS, buildSeedMessages } from '../seeds';
 import { randomFlowerName } from '../flowerNames';
 import { randomRecoveryCode } from '../recoveryWords';
 import { isExpoPushToken, MAX_PUSH_TOKENS_PER_DEVICE } from '../pushTokens';
+import { gcj02ToWgs84, WGS84_COORDINATE_SYSTEM } from '../location';
 import type { DataStore } from './index';
 
 const DATA_DIR = path.join(process.cwd(), 'data');
 const DATA_FILE = path.join(DATA_DIR, 'store.json');
+const BUILT_IN_SEED_MESSAGE_ID_SET = new Set(BUILT_IN_SEED_MESSAGE_IDS);
 /** 默认实现：内存 + JSON 文件持久化（mock 后端，行为与初版一致） */
 export class MemoryStore implements DataStore {
   private state: StoreShape = { users: [], messages: [] };
@@ -31,6 +33,22 @@ export class MemoryStore implements DataStore {
           this.state = parsed;
           this.state.notificationEvents ??= [];
           this.state.pushTokens ??= [];
+          // The reserved built-in demo rows predate the coordinate contract
+          // and were authored in GCJ-02. Convert only those rows once; legacy
+          // user messages remain untouched because native clients used WGS-84.
+          let migratedSeedLocations = 0;
+          for (const message of this.state.messages) {
+            if (
+              message.deviceId !== 'seed-device'
+              || !BUILT_IN_SEED_MESSAGE_ID_SET.has(message.id)
+              || message.coordinateSystem
+            ) continue;
+            const wgs84 = gcj02ToWgs84(message.lat, message.lng);
+            message.lat = wgs84.lat;
+            message.lng = wgs84.lng;
+            message.coordinateSystem = WGS84_COORDINATE_SYSTEM;
+            migratedSeedLocations += 1;
+          }
           const originalPushTokens = this.state.pushTokens;
           const newestByToken = new Map<string, PushToken>();
           for (const entry of originalPushTokens) {
@@ -55,7 +73,10 @@ export class MemoryStore implements DataStore {
           this.nextNotificationEventId = this.nextEventIdAfter(
             this.state.notificationEvents
           );
-          if (this.state.pushTokens.length !== originalPushTokens.length) {
+          if (
+            this.state.pushTokens.length !== originalPushTokens.length
+            || migratedSeedLocations > 0
+          ) {
             this.persistImmediately();
           }
           console.log(`[store] loaded ${parsed.messages.length} messages, ${parsed.users.length} users (memory)`);

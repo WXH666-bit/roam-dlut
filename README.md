@@ -17,6 +17,8 @@
 - **iOS**：申请「始终允许」定位，使用后台位置更新，并注册最多 20 个最近未读留言的地理围栏；点赞离线通知通过 Expo Push Service / APNs 发送。
 - **隐私**：锁屏通知只携带事件类型和留言 ID，不展示留言正文、坐标或点赞者身份。
 - **系统限制**：Android 被用户在系统设置中“强行停止”或手机重启后，服务必须再次打开 App 才能恢复；iOS 被用户明确强制退出后，系统也可能暂停后台唤醒，需再次打开 App 恢复。
+- **坐标契约**：客户端、服务端存储和距离计算统一使用 WGS‑84。原生 GPS 坐标不做偏转；只有明确来自中国大陆地图的 GCJ‑02 数据才在进入系统的边界转换一次。旧版无坐标元数据的发布为滚动升级兼容而按隐含 WGS‑84 接收。
+- **50 米精度门槛**：前台发布/偶遇仅使用 30 秒内且水平精度不超过 30 米的实时位置；Android/iOS 后台通知仅使用 60 秒内且精度不超过 30 米的位置。
 
 荣耀 / MagicOS 真机首次安装后，建议在系统设置中确认：通知已开启、位置为「始终允许」，并在「应用启动管理 / 电池优化」中允许自启动、关联启动和后台活动。不同 MagicOS 版本的菜单名称可能略有差异。
 
@@ -137,7 +139,7 @@ STORAGE_PROVIDER=local PUBLIC_BASE_URL=http://<公网IP>:9091 pnpm dev
 mysql -h <mysql-host> -u <user> -p <database> < server/migrate.sql
 ```
 
-`migrate.sql` 以幂等方式维护 users / messages / message_readers / message_likes / notification_events / notification_event_sequence / push_tokens；首次启动时后端也会自动建表，并**在空库时自动播种 40 条种子留言**。
+`migrate.sql` 可创建当前完整表结构；存量库的缺失列由新版后端启动时按需补齐（数据库账号需要 `ALTER` 权限）。首次启动还会在**空库时自动播种 40 条种子留言**。
 
 **2. 配置环境变量并启动后端**
 
@@ -211,7 +213,7 @@ demo 期 APK 用 Expo 模板自带的 debug keystore 签名（能装能跑，应
 | POST | `/users/reclaim` | 凭三词暗号找回身份；按 IP 限流（1h/10 次失败 → 429） |
 | GET | `/messages` | 存活留言列表（仅 id/坐标/时间，总数即列表长度） |
 | GET | `/messages/:id` | 开信读全文；服务端按 device_id 去重计数，读满即消散 |
-| POST | `/messages` | 发布留言；服务端做敏感词校验 + 每日限额 |
+| POST | `/messages` | 发布留言；WGS‑84 坐标及 `accuracy/captured_at` 校验 + 敏感词校验 + 每日限额 |
 | POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
 | GET | `/notifications` | 按单调游标拉取本身份的点赞事件（需设备 token） |
 | PUT / DELETE | `/notifications/push-token` | 绑定或解绑 iOS Expo push token（需设备 token） |

@@ -1,6 +1,10 @@
+import type { StoredLocationMetadata } from './location';
+
+export type { CoordinateSystem, StoredLocationMetadata } from './location';
+
 export type MediaType = 'none' | 'image' | 'video';
 
-export interface Message {
+export interface Message extends StoredLocationMetadata {
   id: string;
   deviceId: string;
   flowerName: string;

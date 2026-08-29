@@ -24,6 +24,7 @@ import { useHandwritingFont } from '@/contexts/FontContext';
 import { useOtaUpdatePrompt } from '@/contexts/OtaUpdateContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
 import { haversineMeters } from '@/utils/haversine';
+import { isFreshLiveLocation } from '@/utils/location';
 import { playEncounter, playDissolve } from '@/utils/sound';
 import { DissolveFx } from '@/components/DissolveFx';
 
@@ -79,6 +80,7 @@ export default function HomeScreen() {
   const handwriting = useHandwritingFont();
   const {
     location,
+    locationFix,
     locationReady,
     demoMode,
     aliveMessages,
@@ -96,6 +98,15 @@ export default function HomeScreen() {
   const [letterId, setLetterId] = useState<string | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
   const [demoDissolve, setDemoDissolve] = useState(false);
+  // A live fix can become stale without a new location callback.  Re-evaluate
+  // the 30-second gate periodically so an old fix cannot leave an encounter
+  // dot visible indefinitely.
+  const [locationNow, setLocationNow] = useState(() => Date.now());
+
+  useEffect(() => {
+    const timer = setInterval(() => setLocationNow(Date.now()), 5000);
+    return () => clearInterval(timer);
+  }, []);
 
   // 页面聚焦时刷新存活列表
   useFocusEffect(
@@ -112,7 +123,10 @@ export default function HomeScreen() {
 
   // 偶遇感应：与存活留言做 Haversine 距离判定
   useEffect(() => {
-    if (!location) {
+    // Demo coordinates intentionally bypass the GPS quality gate.  Real
+    // encounters require a fresh <=30 m live high-accuracy watch fix.
+    const canTriggerEncounter = demoMode || isFreshLiveLocation(locationFix, locationNow);
+    if (!location || !canTriggerEncounter) {
       setEncounterId(null);
       setNearbyExtra(0);
       return;
@@ -138,7 +152,7 @@ export default function HomeScreen() {
     setEncounterId(nearest);
     setNearbyExtra(nearest ? inRange - 1 : 0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location, aliveMessages, readIds]);
+  }, [location, locationFix, locationNow, demoMode, aliveMessages, readIds]);
 
   const waitingText = useMemo(() => (aliveTotal > 0 ? '条留言正在等待' : '条留言刚刚都消散了'), [aliveTotal]);
   const {

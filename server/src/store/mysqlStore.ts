@@ -8,10 +8,14 @@ import type {
   PushToken,
   User,
 } from '../types';
-import { buildSeedMessages } from '../seeds';
+import { BUILT_IN_SEED_MESSAGE_IDS, buildSeedMessages } from '../seeds';
 import { randomFlowerName } from '../flowerNames';
 import { randomRecoveryCode } from '../recoveryWords';
 import { isExpoPushToken, MAX_PUSH_TOKENS_PER_DEVICE } from '../pushTokens';
+import {
+  gcj02ToWgs84,
+  WGS84_COORDINATE_SYSTEM,
+} from '../location';
 import type { DataStore } from './index';
 
 interface MessageRow {
@@ -23,6 +27,9 @@ interface MessageRow {
   media_key: string | null;
   lat: number;
   lng: number;
+  coordinate_system?: string | null;
+  accuracy?: number | null;
+  captured_at?: number | null;
   created_at: number;
 }
 
@@ -35,7 +42,7 @@ export class MysqlStore implements DataStore {
   }
 
   async init(): Promise<void> {
-    // 自动确保表结构存在；migrate.sql 供手动一键执行，二者等价
+    // 自动确保表结构存在；migrate.sql 适合新库手动一键建表。
     await this.pool.query(`CREATE TABLE IF NOT EXISTS users (
       device_id VARCHAR(64) PRIMARY KEY,
       flower_name VARCHAR(32) NOT NULL,
@@ -60,10 +67,61 @@ export class MysqlStore implements DataStore {
       media_key VARCHAR(512) NULL,
       lat DOUBLE NOT NULL,
       lng DOUBLE NOT NULL,
+      coordinate_system VARCHAR(16) NULL,
+      accuracy DOUBLE NULL,
+      captured_at BIGINT NULL,
       created_at BIGINT NOT NULL,
       INDEX idx_messages_device (device_id),
       INDEX idx_messages_created (created_at)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`);
+    // Keep existing deployments readable without rewriting their coordinates.
+    // NULL means the pre-metadata (implicitly WGS-84) API shape.
+    const [messageColumns] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT COLUMN_NAME AS column_name FROM information_schema.COLUMNS
+       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messages'`
+    );
+    const messageColumnNames = new Set(
+      messageColumns.map((row) => String(row.column_name).toLowerCase())
+    );
+    if (!messageColumnNames.has('coordinate_system')) {
+      await this.pool.query(
+        'ALTER TABLE messages ADD COLUMN coordinate_system VARCHAR(16) NULL'
+      );
+    }
+    if (!messageColumnNames.has('accuracy')) {
+      await this.pool.query(
+        'ALTER TABLE messages ADD COLUMN accuracy DOUBLE NULL'
+      );
+    }
+    if (!messageColumnNames.has('captured_at')) {
+      await this.pool.query(
+        'ALTER TABLE messages ADD COLUMN captured_at BIGINT NULL'
+      );
+    }
+    // One-time, narrowly scoped migration for the reserved built-in demo
+    // messages. Their original constants are GCJ-02; user-authored legacy
+    // rows came from native location APIs and must not be transformed.
+    const seedIdPlaceholders = BUILT_IN_SEED_MESSAGE_IDS.map(() => '?').join(',');
+    const [legacySeedRows] = await this.pool.query<mysql.RowDataPacket[]>(
+      `SELECT id, lat, lng FROM messages
+       WHERE BINARY device_id = ? AND id IN (${seedIdPlaceholders})
+         AND coordinate_system IS NULL`,
+      ['seed-device', ...BUILT_IN_SEED_MESSAGE_IDS]
+    );
+    for (const row of legacySeedRows) {
+      const wgs84 = gcj02ToWgs84(Number(row.lat), Number(row.lng));
+      await this.pool.query(
+        `UPDATE messages SET lat = ?, lng = ?, coordinate_system = ?
+         WHERE id = ? AND BINARY device_id = ? AND coordinate_system IS NULL`,
+        [
+          wgs84.lat,
+          wgs84.lng,
+          WGS84_COORDINATE_SYSTEM,
+          String(row.id),
+          'seed-device',
+        ]
+      );
+    }
     await this.pool.query(`CREATE TABLE IF NOT EXISTS message_readers (
       message_id VARCHAR(32) NOT NULL,
       device_id VARCHAR(64) NOT NULL,
@@ -192,8 +250,24 @@ export class MysqlStore implements DataStore {
 
   private async insertMessage(m: Message): Promise<void> {
     await this.pool.query(
-      'INSERT INTO messages (id, device_id, flower_name, text, media_type, media_key, lat, lng, created_at) VALUES (?,?,?,?,?,?,?,?,?)',
-      [m.id, m.deviceId, m.flowerName, m.text, m.mediaType, m.mediaKey, m.lat, m.lng, m.createdAt]
+      `INSERT INTO messages
+        (id, device_id, flower_name, text, media_type, media_key, lat, lng,
+         coordinate_system, accuracy, captured_at, created_at)
+       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)`,
+      [
+        m.id,
+        m.deviceId,
+        m.flowerName,
+        m.text,
+        m.mediaType,
+        m.mediaKey,
+        m.lat,
+        m.lng,
+        m.coordinateSystem ?? null,
+        m.accuracy ?? null,
+        m.capturedAt ?? null,
+        m.createdAt,
+      ]
     );
   }
 
@@ -219,19 +293,33 @@ export class MysqlStore implements DataStore {
       arr.push(l.device_id);
       likesOf.set(l.message_id, arr);
     }
-    return rows.map((r) => ({
-      id: r.id,
-      deviceId: r.device_id,
-      flowerName: r.flower_name,
-      text: r.text,
-      mediaType: r.media_type,
-      mediaKey: r.media_key,
-      lat: Number(r.lat),
-      lng: Number(r.lng),
-      createdAt: Number(r.created_at),
-      readers: readersOf.get(r.id) ?? [],
-      likes: likesOf.get(r.id) ?? [],
-    }));
+    return rows.map((r) => {
+      const coordinateSystem = r.coordinate_system === WGS84_COORDINATE_SYSTEM
+        ? WGS84_COORDINATE_SYSTEM
+        : undefined;
+      const parsedAccuracy = r.accuracy == null ? undefined : Number(r.accuracy);
+      const parsedCapturedAt = r.captured_at == null ? undefined : Number(r.captured_at);
+      return {
+        id: r.id,
+        deviceId: r.device_id,
+        flowerName: r.flower_name,
+        text: r.text,
+        mediaType: r.media_type,
+        mediaKey: r.media_key,
+        lat: Number(r.lat),
+        lng: Number(r.lng),
+        ...(coordinateSystem ? { coordinateSystem } : {}),
+        ...(parsedAccuracy !== undefined && Number.isFinite(parsedAccuracy)
+          ? { accuracy: parsedAccuracy }
+          : {}),
+        ...(parsedCapturedAt !== undefined && Number.isFinite(parsedCapturedAt)
+          ? { capturedAt: parsedCapturedAt }
+          : {}),
+        createdAt: Number(r.created_at),
+        readers: readersOf.get(r.id) ?? [],
+        likes: likesOf.get(r.id) ?? [],
+      };
+    });
   }
 
   async listMessages(): Promise<Message[]> {

@@ -19,8 +19,26 @@ import {
   type ApiUser,
 } from '@/utils/api';
 import { getDeviceId, overwriteDeviceId } from '@/utils/device';
+import {
+  isFreshLiveLocation,
+  LOCATION_COORDINATE_SYSTEM,
+  LOCATION_MAX_FUTURE_SKEW_MS,
+  type LocationFix,
+  type LocationSource,
+} from '@/utils/location';
 import { READ_IDS_STORAGE_KEY } from '@/utils/notificationStorage';
 
+// Re-export the location metadata types/constants from the context module so
+// existing callers can keep importing all app-facing location contracts here.
+export {
+  LOCATION_COORDINATE_SYSTEM,
+  LOCATION_MAX_AGE_MS,
+  LOCATION_MAX_ACCURACY_METERS,
+  isFreshLiveLocation,
+} from '@/utils/location';
+export type { LocationFix, LocationSource } from '@/utils/location';
+
+/** Coordinates are WGS-84 throughout the client and API payloads. */
 export interface LatLng {
   lat: number;
   lng: number;
@@ -39,8 +57,18 @@ interface AppContextValue {
   adoptIdentity: (u: ApiUser) => Promise<void>;
   // 定位：demoMode 开启时用 mockLocation，否则用真实 GPS
   location: LatLng | null;
-  /** 最近一次坐标的水平精度（米），未知为 null；>=50（偶遇半径）时坐标可能不足以触发偶遇 */
+  /** 最近一次坐标的水平精度（米），未知为 null。 */
   locationAccuracy: number | null;
+  /** 最近一次坐标的原生时间戳（毫秒），未知为 null。 */
+  locationTimestamp: number | null;
+  /** 最近一次坐标的来源；last-known 仅用于 UI 预热。 */
+  locationSource: LocationSource | null;
+  /** 是否来自仍在运行的实时 watch；过期性由 isFreshLiveLocation 再判断。 */
+  locationIsLive: boolean;
+  /** 真实 GPS 定位快照（demoMode 下仍保留真实 GPS 元数据）。 */
+  locationFix: LocationFix | null;
+  /** 读取最新 GPS 快照，供异步发布流程避免捕获旧时间戳。 */
+  getLatestLocationFix: () => LocationFix | null;
   /** 定位流程是否已离开"定位中"（ready/denied/unavailable 任一终态） */
   locationReady: boolean;
   locationStatus: LocationStatus;
@@ -86,8 +114,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [deviceId, setDeviceId] = useState<string | null>(null);
   const [deviceToken, setDeviceToken] = useState<string | null>(null);
   const [user, setUser] = useState<ApiUser | null>(null);
-  const [gpsLocation, setGpsLocation] = useState<LatLng | null>(null);
-  const [locationAccuracy, setLocationAccuracy] = useState<number | null>(null);
+  const [locationFix, setLocationFix] = useState<LocationFix | null>(null);
+  const locationFixRef = useRef<LocationFix | null>(null);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>('locating');
   const [demoMode, setDemoModeState] = useState(false);
   const [mockLocation, setMockLocationState] = useState<LatLng | null>(null);
@@ -176,25 +204,72 @@ export function AppProvider({ children }: { children: ReactNode }) {
     let fallbackStarted = false;
     stopLocationEngines();
     setLocationStatus('locating');
-    setLocationAccuracy(null);
+    // Keep no stale fix while a retry is in flight.  A later last-known fix
+    // may warm up the UI, but it is explicitly marked non-live below.
+    locationFixRef.current = null;
+    setLocationFix(null);
 
     const onFix = (
       lat: number,
       lng: number,
       accuracy: number | null,
-      source: 'last-known' | 'expo-watch' | 'fallback'
+      timestamp: number | null,
+      source: LocationSource,
+      isLive: boolean
     ) => {
       // fallback 接管后拒绝已排队的 GMS 回调，避免它们把状态抢回去并误清 watchdog。
       if (stale() || (fallbackStarted && source !== 'fallback')) return;
-      setGpsLocation({ lat, lng });
-      setLocationAccuracy(accuracy);
+      if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
+      const normalizedAccuracy = (
+        typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy >= 0
+      ) ? accuracy : null;
+      const normalizedTimestamp = (
+        typeof timestamp === 'number'
+        && Number.isFinite(timestamp)
+        && timestamp > 0
+        && timestamp <= Number.MAX_SAFE_INTEGER
+        && timestamp <= Date.now() + LOCATION_MAX_FUTURE_SKEW_MS
+      ) ? Math.round(timestamp) : null;
+      const nextFix: LocationFix = {
+        lat,
+        lng,
+        accuracy: normalizedAccuracy,
+        timestamp: normalizedTimestamp,
+        source,
+        isLive,
+        coordinateSystem: LOCATION_COORDINATE_SYSTEM,
+      };
+      const previousFix = locationFixRef.current;
+      // A cached fallback result can race a real watch callback.  Never let a
+      // non-live fix downgrade an already accepted live fix, and ignore any
+      // out-of-order callback that would move the timestamp backwards.
+      if (
+        previousFix
+        && (
+          (previousFix.isLive && !nextFix.isLive)
+          || (previousFix.timestamp !== null
+            && (nextFix.timestamp === null || nextFix.timestamp < previousFix.timestamp))
+          || (previousFix.timestamp !== null
+            && nextFix.timestamp !== null
+            && previousFix.timestamp === nextFix.timestamp
+            && previousFix.accuracy !== null
+            && nextFix.accuracy !== null
+            && nextFix.accuracy > previousFix.accuracy)
+        )
+      ) return;
+      locationFixRef.current = nextFix;
+      setLocationFix(nextFix);
       setLocationStatus('ready');
       // 缓存坐标只用于快速展示，不能证明主 watch 可用；必须等实时回调后才取消切换。
-      if (source === 'expo-watch' && fallbackTimerRef.current) {
+      if (
+        source === 'expo-watch'
+        && isFreshLiveLocation(nextFix)
+        && fallbackTimerRef.current
+      ) {
         clearTimeout(fallbackTimerRef.current);
         fallbackTimerRef.current = null;
       }
-      if (source === 'fallback' && fallbackWatchdogRef.current) {
+      if (source === 'fallback' && isLive && fallbackWatchdogRef.current) {
         clearTimeout(fallbackWatchdogRef.current);
         fallbackWatchdogRef.current = null;
       }
@@ -226,7 +301,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
             pos.coords.latitude,
             pos.coords.longitude,
             pos.coords.accuracy ?? null,
-            'fallback'
+            pos.timestamp ?? null,
+            'fallback',
+            true
           ),
           (err) => {
             if (stale()) return;
@@ -260,7 +337,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
               pos.coords.latitude,
               pos.coords.longitude,
               pos.coords.accuracy ?? null,
-              'fallback'
+              pos.timestamp ?? null,
+              'fallback',
+              false
             );
           },
           () => {
@@ -302,12 +381,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
           last.coords.latitude,
           last.coords.longitude,
           last.coords.accuracy ?? null,
-          'last-known'
+          last.timestamp ?? null,
+          'last-known',
+          false
         );
       }
       const sub = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.Balanced,
+          // A 50 m encounter/publish needs a live high-accuracy fix; the
+          // last-known value above remains a UI warm-up only.
+          accuracy: Location.Accuracy.High,
           timeInterval: 5000,
           distanceInterval: 10,
         },
@@ -315,7 +398,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
           pos.coords.latitude,
           pos.coords.longitude,
           pos.coords.accuracy ?? null,
-          'expo-watch'
+          pos.timestamp ?? null,
+          'expo-watch',
+          true
         )
       );
       if (stale() || fallbackStarted) {
@@ -421,8 +506,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const setDemoMode = useCallback((on: boolean) => {
     setDemoModeState(on);
     if (on) {
-      // 开启时默认落在校园中心（令希图书馆与主楼之间）
-      setMockLocationState((prev) => prev ?? { lat: 38.8828, lng: 121.5265 });
+      // WGS-84 校园中心；旧值是 GCJ-02，已在坐标契约迁移时换算。
+      setMockLocationState((prev) => prev ?? { lat: 38.88192768, lng: 121.52139591 });
     }
   }, []);
 
@@ -439,8 +524,17 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  const gpsLocation = useMemo<LatLng | null>(
+    () => (locationFix ? { lat: locationFix.lat, lng: locationFix.lng } : null),
+    [locationFix]
+  );
+  const locationAccuracy = locationFix?.accuracy ?? null;
+  const locationTimestamp = locationFix?.timestamp ?? null;
+  const locationSource = locationFix?.source ?? null;
+  const locationIsLive = locationFix?.isLive ?? false;
   const location = demoMode ? mockLocation : gpsLocation;
   const locationReady = locationStatus !== 'locating';
+  const getLatestLocationFix = useCallback(() => locationFixRef.current, []);
 
   const value = useMemo<AppContextValue>(
     () => ({
@@ -451,6 +545,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       adoptIdentity,
       location,
       locationAccuracy,
+      locationTimestamp,
+      locationSource,
+      locationIsLive,
+      locationFix,
+      getLatestLocationFix,
       locationReady,
       locationStatus,
       retryLocation,
@@ -469,7 +568,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       readLimit,
     }),
     [
-      deviceId, deviceToken, user, adoptIdentity, location, locationAccuracy, locationReady,
+      deviceId, deviceToken, user, adoptIdentity, location, locationAccuracy,
+      locationTimestamp, locationSource, locationIsLive, locationFix,
+      getLatestLocationFix, locationReady,
       locationStatus, retryLocation, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, readIdsReady, markRead,
       onboarded, completeOnboarding, readLimit,

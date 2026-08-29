@@ -13,11 +13,24 @@ import {
 } from '@/utils/notificationStorage';
 import { showLocalNotification } from './notificationRuntime';
 
+/**
+ * Coordinate contract: Expo/Core Location supplies raw WGS-84 coordinates.
+ * Keep them unconverted here; the server and local distance calculation use
+ * the same datum, and map-provider conversion belongs only at display time.
+ */
 export const IOS_LOCATION_TASK_NAME = 'cidi-ios-background-location';
 export const IOS_GEOFENCE_TASK_NAME = 'cidi-ios-proximity-geofence';
 export const PROXIMITY_RADIUS_METERS = 50;
 export const IOS_MAX_GEOFENCES = 20;
 const GEOFENCE_SYNC_MIN_INTERVAL_MS = 60_000;
+// A 50 m proximity action must be backed by a genuinely useful fix.  Keep
+// these guards local to the background worker: OS-delivered callbacks can be
+// resumed much later than the foreground location flow and must be checked at
+// the point where they trigger a notification.
+const MAX_BACKGROUND_LOCATION_ACCURACY_METERS = 30;
+const MAX_BACKGROUND_LOCATION_AGE_MS = 60_000;
+const IOS_GEOFENCE_LOCATION_MAX_AGE_MS = 30_000;
+const CURRENT_LOCATION_TIMEOUT_MS = 10_000;
 let proximityClaimQueue: Promise<void> = Promise.resolve();
 let iosLocationOperationQueue: Promise<void> = Promise.resolve();
 let iosGeofenceOperationQueue: Promise<void> = Promise.resolve();
@@ -51,6 +64,41 @@ type LocationTaskData = {
 type GeofenceTaskData = {
   eventType?: unknown;
   region?: { identifier?: string };
+};
+
+type LocationCoords = {
+  latitude?: number;
+  longitude?: number;
+  accuracy?: number | null;
+};
+
+const hasUsableCoordinates = (
+  coords: LocationCoords | null | undefined
+): coords is LocationCoords & { latitude: number; longitude: number } => {
+  if (
+    !coords
+    || typeof coords.latitude !== 'number'
+    || !Number.isFinite(coords.latitude)
+    || typeof coords.longitude !== 'number'
+    || !Number.isFinite(coords.longitude)
+  ) return false;
+
+  // A missing uncertainty is not safe for a 50 m decision.  Native iOS
+  // locations normally provide it; rejecting null also protects mocked/OEM
+  // payloads from silently bypassing the precision gate.
+  if (typeof coords.accuracy !== 'number') return false;
+  return Number.isFinite(coords.accuracy)
+    && coords.accuracy >= 0
+    && coords.accuracy <= MAX_BACKGROUND_LOCATION_ACCURACY_METERS;
+};
+
+const hasFreshTimestamp = (timestamp?: number | null, now = Date.now()): boolean => {
+  // Native LocationObject values always carry a timestamp.  A missing one
+  // cannot prove freshness, so it must not drive a proximity notification.
+  if (typeof timestamp !== 'number') return false;
+  return Number.isFinite(timestamp)
+    && timestamp >= now - MAX_BACKGROUND_LOCATION_AGE_MS
+    && timestamp <= now + 5_000;
 };
 
 const readJsonArray = async (key: string): Promise<string[]> => {
@@ -107,12 +155,7 @@ const processLocationTask = async (args: unknown): Promise<void> => {
   if (value.error) return;
   const latestUpdate = value.data?.locations?.at(-1);
   const latest = latestUpdate?.coords;
-  if (!latest || typeof latest.latitude !== 'number' || typeof latest.longitude !== 'number') return;
-  if (typeof latest.accuracy === 'number' && latest.accuracy > 100) return;
-  if (
-    typeof latestUpdate.timestamp === 'number'
-    && latestUpdate.timestamp < Date.now() - 5 * 60_000
-  ) return;
+  if (!hasUsableCoordinates(latest) || !hasFreshTimestamp(latestUpdate?.timestamp)) return;
   if (await isAppInForeground()) return;
 
   // Do not send the message body or coordinates through the notification.  The
@@ -159,21 +202,32 @@ const processGeofenceTask = async (args: unknown): Promise<void> => {
     // Core Location can deliver a region callback with some boundary latency.
     // Re-check the actual last-known/current location so a false wake outside
     // the strict 50m radius never becomes a user-visible alert.
-    const last = await Location.getLastKnownPositionAsync({
-      maxAge: 120_000,
-      requiredAccuracy: 100,
+    let position = await Location.getLastKnownPositionAsync({
+      maxAge: IOS_GEOFENCE_LOCATION_MAX_AGE_MS,
+      requiredAccuracy: MAX_BACKGROUND_LOCATION_ACCURACY_METERS,
     });
-    let point = last?.coords;
-    if (!point) {
-      const current = await Promise.race([
-        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 10_000)),
+    // A mocked/OEM implementation can still return a value outside the
+    // requested bounds.  Fall back to a fresh high-accuracy read before
+    // deciding whether an enter event is real.
+    if (
+      !position
+      || !hasUsableCoordinates(position.coords)
+      || !hasFreshTimestamp(position.timestamp)
+    ) {
+      position = await Promise.race([
+        Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), CURRENT_LOCATION_TIMEOUT_MS)),
       ]);
-      point = current?.coords;
     }
-    if (!point || typeof point.latitude !== 'number' || typeof point.longitude !== 'number') return;
-    if (typeof point.accuracy === 'number' && point.accuracy > 100) return;
-    if (haversineMeters(point.latitude, point.longitude, message.lat, message.lng) > config.radius) return;
+    if (
+      !position
+      || !hasUsableCoordinates(position.coords)
+      || !hasFreshTimestamp(position.timestamp)
+    ) return;
+    if (
+      haversineMeters(position.coords.latitude, position.coords.longitude, message.lat, message.lng)
+      > config.radius
+    ) return;
   } catch {
     // A transient network failure should not turn an OS geofence wake-up into
     // a crash.  The continuous task will retry on its next location update.
@@ -227,7 +281,9 @@ export const readBackgroundLocationConfig = async (): Promise<BackgroundLocation
 };
 
 const backgroundLocationOptions = {
-  accuracy: Location.Accuracy.Balanced,
+  // High is required for a 50 m action; Balanced can report a fix whose
+  // uncertainty is already larger than the proximity radius.
+  accuracy: Location.Accuracy.High,
   distanceInterval: 25,
   timeInterval: 30_000,
   pausesUpdatesAutomatically: false,

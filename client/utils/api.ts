@@ -172,7 +172,8 @@ export const openMessage = async (id: string, deviceId: string, token?: string |
  * 服务端文件：server/src/routes/messages.ts
  * 接口：POST /api/v1/messages
  * Body：device_id: string, text: string(≤140), media_type: 'none'|'image'|'video',
- *       media_key?: string, lat: number, lng: number
+ *       media_key?: string, lat/lng: WGS-84 coordinates,
+ *       coordinate_system: 'wgs84', accuracy: number, captured_at: Unix ms
  */
 export const publishMessage = async (payload: {
   deviceId: string;
@@ -181,6 +182,9 @@ export const publishMessage = async (payload: {
   mediaKey?: string;
   lat: number;
   lng: number;
+  coordinateSystem: string;
+  accuracy: number;
+  capturedAt: number;
 }): Promise<{ id: string; created_at: number }> => {
   const res = await fetch(`${BASE}/api/v1/messages`, {
     method: 'POST',
@@ -192,6 +196,9 @@ export const publishMessage = async (payload: {
       media_key: payload.mediaKey,
       lat: payload.lat,
       lng: payload.lng,
+      coordinate_system: payload.coordinateSystem,
+      accuracy: payload.accuracy,
+      captured_at: payload.capturedAt,
     }),
   });
   if (!res.ok) throw await parseError(res);

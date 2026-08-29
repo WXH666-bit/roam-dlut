@@ -46,8 +46,9 @@ import kotlin.math.sqrt
  * It intentionally uses LocationManager rather than Expo Location's fused
  * provider. This keeps the Honor/MagicOS path independent of Google Play
  * Services while still allowing standard Android devices to use GPS/network
- * providers. The service is sticky, and all state needed to resume polling is
- * stored in SharedPreferences.
+ * providers. Coordinates are consumed as raw WGS-84 latitude/longitude; no
+ * GCJ-02 or other map-provider conversion is applied. The service is sticky,
+ * and all state needed to resume polling is stored in SharedPreferences.
  */
 class BackgroundGuardianService : Service() {
   companion object {
@@ -62,6 +63,9 @@ class BackgroundGuardianService : Service() {
     private const val LOCATION_INTERVAL_MS = 15_000L
     private const val LOCATION_MIN_DISTANCE_METERS = 5f
     private const val LOCATION_CHECK_THROTTLE_MS = 15_000L
+    private const val MAX_LOCATION_ACCURACY_METERS = 30f
+    private const val MAX_LOCATION_AGE_MS = 60_000L
+    private const val MAX_LOCATION_FUTURE_MS = 5_000L
     private const val CONNECT_TIMEOUT_MS = 10_000
     private const val READ_TIMEOUT_MS = 10_000
     private const val MAX_RESPONSE_BYTES = 512 * 1024
@@ -168,13 +172,14 @@ class BackgroundGuardianService : Service() {
 
   private val locationListener = object : LocationListener {
     override fun onLocationChanged(location: Location) {
-      // Keep the latest fix in memory only; precise coordinates are not persisted.
-      lastLocation = Location(location)
+      // Keep only a fresh, useful fix in memory. Coarse provider callbacks are
+      // rejected by the 30 m gate before they can displace the current fix.
+      if (!rememberBestLocation(location)) return
       val now = SystemClock.elapsedRealtime()
       if (now < nextLocationCheckAt) return
       nextLocationCheckAt = now + LOCATION_CHECK_THROTTLE_MS
       val currentConfig = config ?: return
-      fetchNearbyMessages(currentConfig, location)
+      lastLocation?.let { fetchNearbyMessages(currentConfig, it) }
     }
 
     override fun onProviderEnabled(provider: String) {
@@ -316,12 +321,7 @@ class BackgroundGuardianService : Service() {
         // A recent system-provider fix lets the first server check happen
         // immediately instead of waiting for the next GPS callback.
         val lastKnown = locationManager.getLastKnownLocation(provider)
-        if (lastKnown != null && isRecentEnough(lastKnown)) {
-          val current = lastLocation
-          if (current == null || lastKnown.time > current.time) {
-            lastLocation = Location(lastKnown)
-          }
-        }
+        if (lastKnown != null) rememberBestLocation(lastKnown)
       } catch (_: SecurityException) {
         // Permission can be revoked while the service is alive. The next
         // foreground start/config update will try again.
@@ -336,8 +336,49 @@ class BackgroundGuardianService : Service() {
     }
   }
 
-  private fun isRecentEnough(location: Location): Boolean =
-    location.time > System.currentTimeMillis() - 5 * 60_000L
+  private fun isRecentEnough(location: Location, now: Long = System.currentTimeMillis()): Boolean =
+    location.time >= now - MAX_LOCATION_AGE_MS &&
+      location.time <= now + MAX_LOCATION_FUTURE_MS
+
+  private fun accuracyMeters(location: Location): Float? {
+    if (!location.hasAccuracy()) return null
+    val accuracy = location.accuracy
+    return accuracy.takeIf { it.isFinite() && it >= 0f }
+  }
+
+  private fun isUsableLocation(location: Location): Boolean {
+    if (!location.latitude.isFinite() || !location.longitude.isFinite()) return false
+    if (!isRecentEnough(location)) return false
+    // An absent uncertainty is not safe for a 50 m decision.  Framework
+    // provider fixes normally carry it; rejecting unknown accuracy prevents a
+    // coarse/OEM payload from bypassing the precision gate.
+    return accuracyMeters(location)?.let { it <= MAX_LOCATION_ACCURACY_METERS } ?: false
+  }
+
+  /** Prefer the newest usable fix; at an equal timestamp keep better accuracy. */
+  private fun shouldReplaceLocation(current: Location, candidate: Location): Boolean {
+    if (!isUsableLocation(current)) return true
+    if (candidate.time > current.time) return true
+    if (candidate.time < current.time) return false
+    return (accuracyMeters(candidate) ?: Float.MAX_VALUE) <=
+      (accuracyMeters(current) ?: Float.MAX_VALUE)
+  }
+
+  private fun rememberBestLocation(candidate: Location): Boolean {
+    val current = lastLocation
+    if (!isUsableLocation(candidate)) {
+      // A newer coarse/invalid callback means we no longer know whether the
+      // previous precise point still represents the user's current position.
+      // Drop it rather than producing a false 50 m alert while the user moves.
+      if (current != null && candidate.time > current.time) lastLocation = null
+      return false
+    }
+    if (current != null && !shouldReplaceLocation(current, candidate)) return false
+    // Precise coordinates stay in memory only; they are never persisted by the
+    // guardian's SharedPreferences store.
+    lastLocation = Location(candidate)
+    return true
+  }
 
   private fun removeLocationUpdates() {
     if (!::locationManager.isInitialized) return
@@ -357,9 +398,10 @@ class BackgroundGuardianService : Service() {
   }
 
   private fun fetchNearbyMessages(currentConfig: GuardianConfig, location: Location) {
-    // Approximate/coarse fixes can be hundreds of metres away. It is safer to
-    // wait for a usable fix than to tell the user a message is within 50 m.
-    if (location.hasAccuracy() && location.accuracy > 100f) return
+    // Approximate/coarse or stale fixes can be hundreds of metres away. It is
+    // safer to wait for a usable fix than to tell the user a message is within
+    // 50 m.
+    if (!isUsableLocation(location)) return
     val root = getJson(apiUrl(currentConfig, "/messages"), currentConfig.deviceToken) ?: return
     val reminded = BackgroundGuardianStore.readRemindedMessageIds(this)
     var changed = false

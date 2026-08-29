@@ -6,6 +6,7 @@ import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Alert, AppState, Platform, type AppStateStatus } from 'react-native';
 import { LetterOverlay } from '@/components/LetterOverlay';
 import { useApp } from '@/contexts/AppContext';
+import { isFreshLiveLocation } from '@/utils/location';
 import { playLike } from '@/utils/sound';
 import { READ_IDS_STORAGE_KEY } from '@/utils/notificationStorage';
 import {
@@ -140,7 +141,7 @@ export function NotificationBridge() {
     onboarded,
     deviceId,
     deviceToken,
-    location,
+    locationFix,
     aliveMessages,
     readIds,
     readIdsReady,
@@ -473,7 +474,16 @@ export function NotificationBridge() {
         deviceToken,
         radius: PROXIMITY_RADIUS_METERS,
       });
-      if (!cancelled && started) await syncIosGeofences(location, aliveMessages, readIds);
+      // The 20-region limit makes the ranking point important. A cached or
+      // stale coordinate could register the wrong part of campus and miss the
+      // actually nearby messages, so wait for a fresh live fix before sorting.
+      if (!cancelled && started && locationFix && isFreshLiveLocation(locationFix)) {
+        await syncIosGeofences(
+          { lat: locationFix.lat, lng: locationFix.lng },
+          aliveMessages,
+          readIds
+        );
+      }
     })();
     return () => {
       cancelled = true;
@@ -482,7 +492,7 @@ export function NotificationBridge() {
     onboarded,
     deviceId,
     deviceToken,
-    location,
+    locationFix,
     aliveMessages,
     readIds,
     permissionRevision,

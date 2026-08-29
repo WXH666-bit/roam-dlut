@@ -1,5 +1,9 @@
 import type { MediaType, Message } from './types';
 import { SEED_MEDIA } from './seedMedia';
+import {
+  gcj02ToWgs84,
+  WGS84_COORDINATE_SYSTEM,
+} from './location';
 
 interface SeedDef {
   text: string;
@@ -12,6 +16,8 @@ interface SeedDef {
   readers?: number;
 }
 
+// 这些旧演示常量来自中国大陆地图坐标（GCJ-02）。只在种子数据边界
+// 转为 WGS-84；手机原生 GPS 与用户发布坐标绝不能走此转换。
 // 大连理工大学凌水校区地标附近（校园约 2km × 2km）
 const SEEDS: SeedDef[] = [
   { text: '2019 级的我在这个窗边背完了整本红宝书。祝下一个坐在这里的人，上岸。', flowerName: '窗边的红宝书', lat: 38.88360, lng: 121.52910, readers: 62 },
@@ -56,6 +62,11 @@ const SEEDS: SeedDef[] = [
   { text: '拍毕业照那天，我们把帽子扔上去，没人管帽子掉哪了。青春就是不在乎帽子的下落。', flowerName: '毕业季的学士帽', lat: 38.87990, lng: 121.52660, readers: 92 },
 ];
 
+/** Exact reserved IDs are the authoritative marker for built-in demo rows. */
+export const BUILT_IN_SEED_MESSAGE_IDS: readonly string[] = Object.freeze(
+  SEEDS.map((_, index) => `seed-${String(index + 1).padStart(2, '0')}`)
+);
+
 // 伪随机但确定的预置读者列表：reader-seed-{i}-{k}
 const fakeReaders = (seedIndex: number, count: number): string[] =>
   Array.from({ length: count }, (_, k) => `reader-seed-${seedIndex}-${k}`);
@@ -65,15 +76,17 @@ export const buildSeedMessages = (now: number): Message[] =>
     // 创建时间错开：最近 25 天内，越早的种子越"旧"
     const createdAt = now - ((i * 37 + 11) % 25) * 24 * 60 * 60 * 1000 - (i % 9) * 3600_000;
     const hasMedia = !!s.mediaType && !!s.mediaKey;
+    const wgs84 = gcj02ToWgs84(s.lat, s.lng);
     return {
-      id: `seed-${String(i + 1).padStart(2, '0')}`,
+      id: BUILT_IN_SEED_MESSAGE_IDS[i],
       deviceId: 'seed-device',
       flowerName: s.flowerName,
       text: s.text,
       mediaType: hasMedia ? (s.mediaType as MediaType) : 'none',
       mediaKey: hasMedia ? (s.mediaKey as string) : null,
-      lat: s.lat,
-      lng: s.lng,
+      lat: wgs84.lat,
+      lng: wgs84.lng,
+      coordinateSystem: WGS84_COORDINATE_SYSTEM,
       createdAt,
       readers: fakeReaders(i, Math.min(s.readers ?? 0, 98)),
       likes: fakeReaders(i, Math.min(Math.floor((s.readers ?? 0) / 3), 30)),

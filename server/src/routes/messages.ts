@@ -14,6 +14,7 @@ import { hitSensitiveWord } from '../sensitiveWords';
 import { mediaUrlOf } from '../storage';
 import { tokenValid } from '../auth';
 import { sendLikeNotification } from '../notifications';
+import { validatePublishLocation } from '../location';
 
 const router = Router();
 
@@ -70,7 +71,11 @@ router.get('/:id', async (req, res) => {
 
 // 发布留言：敏感词校验 + 每日限额
 router.post('/', async (req, res) => {
-  const { device_id, text, media_type, media_key, lat, lng } = req.body ?? {};
+  // Capture this before any asynchronous work so upload/network time counts
+  // against freshness, while still allowing the server's bounded clock slack.
+  const requestReceivedAt = Date.now();
+  const body = req.body ?? {};
+  const { device_id, text, media_type, media_key } = body;
   if (typeof device_id !== 'string' || !device_id.trim()) {
     return res.status(400).json({ error: 'device_id required' });
   }
@@ -80,8 +85,9 @@ router.post('/', async (req, res) => {
   if (text.length > 140) {
     return res.status(400).json({ error: '留言最多 140 字' });
   }
-  if (typeof lat !== 'number' || typeof lng !== 'number' || Math.abs(lat) > 90 || Math.abs(lng) > 180) {
-    return res.status(400).json({ error: '坐标不合法' });
+  const location = validatePublishLocation(body, requestReceivedAt);
+  if (!location.ok) {
+    return res.status(400).json({ error: location.message, code: location.code });
   }
   const mt = media_type === 'image' || media_type === 'video' ? media_type : 'none';
   if (mt !== 'none' && (typeof media_key !== 'string' || !media_key)) {
@@ -105,13 +111,22 @@ router.post('/', async (req, res) => {
   }
 
   const user = await ensureUser(deviceId);
+  const locationData = location.value.legacy
+    ? {}
+    : {
+      coordinateSystem: location.value.coordinateSystem,
+      accuracy: location.value.accuracy,
+      capturedAt: location.value.capturedAt,
+    };
   const m = await createMessage({
     deviceId,
     flowerName: user.flowerName,
     text: text.trim(),
     mediaType: mt,
     mediaKey: mt === 'none' ? null : String(media_key),
-    lat, lng,
+    lat: location.value.lat,
+    lng: location.value.lng,
+    ...locationData,
   });
   return res.status(201).json({ id: m.id, created_at: m.createdAt });
 });

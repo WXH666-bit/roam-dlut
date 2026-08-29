@@ -1,5 +1,5 @@
--- Here · MySQL 建表脚本（七牛云数据库一键执行）
--- 与 server/src/store/mysqlStore.ts 的 init() 等价；字符集 utf8mb4 支持贴纸占位符与表情
+-- Here · MySQL 当前表结构（适合新库一键执行）
+-- 存量库缺列由 server/src/store/mysqlStore.ts 的 init() 检查并补齐；字符集 utf8mb4 支持贴纸占位符与表情
 
 CREATE TABLE IF NOT EXISTS users (
   device_id VARCHAR(64) PRIMARY KEY,
@@ -20,10 +20,19 @@ CREATE TABLE IF NOT EXISTS messages (
   media_key VARCHAR(512) NULL COMMENT '对象存储 key，读取时实时生成签名 URL',
   lat DOUBLE NOT NULL,
   lng DOUBLE NOT NULL,
+  coordinate_system VARCHAR(16) NULL COMMENT '规范坐标系；新发布统一为 wgs84，NULL 表示旧 API 隐含 WGS-84',
+  accuracy DOUBLE NULL COMMENT '设备报告的水平定位精度（米）',
+  captured_at BIGINT NULL COMMENT '设备获取定位的毫秒时间戳',
   created_at BIGINT NOT NULL COMMENT '毫秒时间戳',
   INDEX idx_messages_device (device_id),
   INDEX idx_messages_created (created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 存量库升级（服务端 init() 会逐列检查并安全补齐；普通用户坐标不会被改写）：
+-- ALTER TABLE messages ADD COLUMN coordinate_system VARCHAR(16) NULL;
+-- ALTER TABLE messages ADD COLUMN accuracy DOUBLE NULL;
+-- ALTER TABLE messages ADD COLUMN captured_at BIGINT NULL;
+-- 仅 seed-device 下固定的 seed-01…seed-40 会由服务端一次性从 GCJ-02 转为 WGS-84。
 
 -- 阅读记录：按设备去重；剩余可读名额 = READ_LIMIT - 本表计数
 CREATE TABLE IF NOT EXISTS message_readers (
