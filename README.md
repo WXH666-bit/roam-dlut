@@ -41,6 +41,17 @@ Web 端降级：优先 `navigator.share`，不可用时展示预填文案 + 一�
 - 老用户兼容：存量无暗号的用户在下次打开 App 时会**惰性补发**一枚（双 store 实现行为一致）
 - 防爆破：`POST /users/reclaim` 按 IP 限流，每小时最多 10 次失败，超出返回 429「试太多次了，喝口水想想再来」
 
+## 内容安全与管理员复核
+
+- 每条新留言都会先以**隐藏待审**状态写入数据库并立即向 App 返回 `202`，再由限并发后台队列调用 `step-3.7-flash`；进程意外退出后会恢复尚未得到模型结论的任务。普通留言列表、开信接口、作者的「我的发布」都不会返回待审内容。
+- 模型明确判定安全才会公开；疑似违规、模型超时、返回格式异常或暂不支持自动识别的媒体格式都会保留在管理员暂存区，绝不因模型故障默认放行。
+- 上传附件先登记为一小时临时资产，发布消息时由数据层原子认领且只能使用一次；未被认领的过期附件和被管理员拒绝的附件都会由后台定时清理，失败任务保留并自动重试。
+- JPG/PNG/静态 GIF/WebP 与 MP4/MOV/MKV 可直接交给多模态模型；其他视觉格式会安全降级为人工复核。MP3/WAV 会先经 StepFun ASR 转写，再由 `step-3.7-flash` 判断，其他音频格式同样转人工复核。
+- 发给 StepFun 的审核请求只包含留言正文和附件，不包含坐标、设备 ID、花名或找回暗号；内测用户仍应被告知其内容会交由第三方模型处理。
+- 管理员在本机打开 `http://127.0.0.1:9091/admin/moderation`，或通过 HTTPS 打开 `https://<服务器>/admin/moderation`，输入独立的 `ADMIN_SECRET` 后，可以放行、彻底删除、禁言 1/7/30 天、永久封禁或解除封禁。拒绝操作会在数据库事务中先创建媒体清理任务；对象存储临时失败时会保留任务供启动时或管理员手动重试，成功后清除其媒体 key。
+- 只有管理员确认「违规并删除」后才累计一次违规。自动规则为：第 1 次仅记录，第 2 次禁言 1 天，第 3 次 7 天，第 4 次 30 天，第 5 次永久封禁；管理员可按严重程度覆盖处罚。
+- 当前“设备封禁”基于 App 的匿名安装身份。清除应用数据、卸载重装或修改客户端伪造新 ID 都可能绕过；朋友内测可接受，若未来公开运营，需要再接 Android Play Integrity / iOS App Attest 或账号体系。
+
 ## 技术栈
 
 | 端 | 技术 |
@@ -106,6 +117,8 @@ pnpm ota:rollback -- --message "回滚说明" # 回滚到 APK 内置版本
 | `PORT` | `9091` | 后端监听端口 |
 | `STORAGE_PROVIDER` | 开发态内置存储 | 设为 `qiniu` 时切换为七牛 Kodo（需同时设下方 4 个变量）；设为 `local` 时落盘 `data/uploads/` |
 | `PUBLIC_BASE_URL` | `http://localhost:9091` | 仅 `local` 模式用：媒体 URL 前缀，部署时配 `http://<公网IP>:9091` |
+| `LOCAL_MEDIA_SIGNING_SECRET` | 复用 `SERVER_SECRET` | 本地媒体短期访问 URL 的签名密钥；两者都未设置时进程启动随机生成 |
+| `MEDIA_UPLOAD_TOKEN_SECRET` | 复用 `SERVER_SECRET` | 一小时上传票据的签名密钥，用于绑定媒体 key、类型与设备身份 |
 | `OTA_PUBLIC_BASE_URL` | 跟随请求地址 | OTA manifest 中资源 URL 的公网前缀，当前部署填 `http://1.92.120.33:9091` |
 | `OTA_UPDATES_DIR` | `data/updates` | Expo Updates 导出产物目录；生产机推荐使用绝对路径 |
 | `OTA_PRIVATE_KEY_PATH` | — | OTA RSA 签名私钥绝对路径；启用代码签名的 APK 请求更新时必配，严禁提交 Git |
@@ -115,6 +128,21 @@ pnpm ota:rollback -- --message "回滚说明" # 回滚到 APK 内置版本
 | `QINIU_BUCKET` | — | Kodo 空间名 |
 | `DATABASE_URL` | 内存 + JSON | MySQL 连接串，如 `mysql://user:pass@host:3306/cidi`；设置后数据走 MySQL |
 | `SERVER_SECRET` | 不校验 | 设置后注册接口签发设备 token，开信/点赞须带 `x-device-token` 头（轻量防刷） |
+| `STEPFUN_API_KEY` | — | StepFun 服务端 API 密钥；缺失或调用失败时内容只进入人工待审，不会公开 |
+| `STEPFUN_MODEL` | `step-3.7-flash` | 内容安全初审模型 |
+| `STEPFUN_BASE_URL` | `https://api.stepfun.com/v1` | StepFun 中国站 API 地址 |
+| `STEPFUN_TIMEOUT_MS` | `60000` | 单次审核/转写超时；最高 120 秒 |
+| `MODERATION_CONCURRENCY` | `2` | 后台模型审核最大并发（最高 `8`） |
+| `MODERATION_IP_HOURLY_LIMIT` | `30` | 单 IP 每小时最多创建的付费审核任务 |
+| `MODERATION_GLOBAL_DAILY_LIMIT` | `500` | 单进程每日付费审核任务硬上限，防止费用失控 |
+| `REGISTRATION_IP_HOURLY_LIMIT` | `20` | 单 IP 每小时最多创建的新匿名身份；已存在身份的幂等注册不计入 |
+| `UPLOAD_IP_HOURLY_LIMIT` / `UPLOAD_DEVICE_HOURLY_LIMIT` | `30` / `20` | 上传预检限额，发生在大文件进入内存之前 |
+| `UPLOAD_MAX_CONCURRENCY` | `2` | 单进程同时缓冲的大文件上传数（最高 `8`） |
+| `MEDIA_CLEANUP_INTERVAL_MS` | `900000` | 被拒媒体与过期临时上传的自动清理重试周期（最低 1 分钟） |
+| `RATE_LIMIT_TRUST_PROXY` | `false` | 仅后端严格位于一层可信反向代理之后时开启，用于取得真实客户端 IP |
+| `ADMIN_SECRET` | — | 管理后台独立密钥；缺失时所有管理员 API 关闭 |
+| `ADMIN_TRUST_PROXY` | `false` | HTTPS 在可信反向代理终止时设为 `true`，允许读取代理写入的 `X-Forwarded-Proto` |
+| `ADMIN_ALLOW_INSECURE_HTTP` | `false` | 仅封闭演示网络临时允许公网 HTTP 管理请求；正式环境不要开启 |
 | `EXPO_ACCESS_TOKEN` | — | 可选；Expo Push Service 开启访问令牌保护后填写，供服务端发送 iOS 点赞通知 |
 
 ## 无对象存储的快速部署（过渡方案）
@@ -155,6 +183,11 @@ export OTA_PUBLIC_BASE_URL=http://1.92.120.33:9091
 export OTA_UPDATES_DIR=/opt/roam-dlut/server/data/updates
 export OTA_PRIVATE_KEY_PATH=/opt/roam-dlut/server/data/ota/keys/private-key.pem
 export SERVER_SECRET=<随机长字符串>   # 如 openssl rand -hex 32
+export STEPFUN_API_KEY=<在服务器上配置的新密钥>
+export STEPFUN_MODEL=step-3.7-flash
+export ADMIN_SECRET=<另一个随机长字符串>
+# 建议按比赛人数和账户预算收紧
+export MODERATION_GLOBAL_DAILY_LIMIT=500
 
 # 可选；不设时继续使用本地 JSON 持久化
 # export DATABASE_URL=mysql://<user>:<pass>@<mysql-host>:3306/<database>
@@ -169,6 +202,11 @@ PORT=9091 pnpm start
 - `STORAGE_PROVIDER=local` 时上传文件落在 `server/data/uploads/`；以后需要时仍可只改环境变量切换七牛 Kodo
 - OTA 文件落在 `server/data/updates/`，由 `/api/v1/updates/*` 提供；私钥只存在部署机和云服务器，APK 仅内置公钥证书
 - `SERVER_SECRET` 一旦上线就不要再改，否则所有已安装设备的 token 立即失效
+- `STEPFUN_API_KEY` 与 `ADMIN_SECRET` 只放服务器环境变量，不能放 App、Git、截图或聊天记录；公开过的密钥应先撤销再换新
+- 管理密钥不能通过公网 HTTP 传输；默认只允许 localhost 或 HTTPS 管理请求
+- 内容审核和音频转写是按量计费能力；默认另有单 IP 与单进程每日预算阈值。模型故障、余额不足或不支持的媒体格式会进入人工待审，不会直接公开
+- 内置限额适合当前单实例朋友内测；若以后多实例公开运营，应把计数迁到 Redis/API 网关，并接入更强的设备证明
+- 滚动更新时先发布客户端 OTA，再部署新版后端；新版上传接口会在读取大文件前强制要求 `x-device-id`，未取得热更新的旧客户端将无法上传
 - 完整的首次部署、日常上传和回滚步骤见 [`docs/热更推送手册.md`](./docs/热更推送手册.md)
 
 **3. 构建 App（指向公网后端）**
@@ -213,11 +251,18 @@ demo 期 APK 用 Expo 模板自带的 debug keystore 签名（能装能跑，应
 | POST | `/users/reclaim` | 凭三词暗号找回身份；按 IP 限流（1h/10 次失败 → 429） |
 | GET | `/messages` | 存活留言列表（仅 id/坐标/时间，总数即列表长度） |
 | GET | `/messages/:id` | 开信读全文；服务端按 device_id 去重计数，读满即消散 |
-| POST | `/messages` | 发布留言；WGS‑84 坐标及 `accuracy/captured_at` 校验 + 敏感词校验 + 每日限额 |
+| POST | `/messages` | 发布留言；WGS‑84 校验后隐藏入队并立即返回 202，由后台模型初审 |
+| GET | `/messages/:id/moderation-status` | 作者短轮询是否已自动公开，不返回模型原因或分类 |
 | POST | `/messages/:id/like` | 点赞（解锁后可点一次，幂等） |
 | GET | `/notifications` | 按单调游标拉取本身份的点赞事件（需设备 token） |
 | PUT / DELETE | `/notifications/push-token` | 绑定或解绑 iOS Expo push token（需设备 token） |
-| POST | `/upload` | 图片/视频/音频上传（multipart，≤120MB），返回存储 key 与访问 URL |
+| POST | `/upload` | 图片/视频/音频上传（multipart，≤120MB，需预检设备头），校验文件签名后返回设备绑定票据 |
+| GET | `/admin/moderation/pending` | 管理员待审队列（需 `ADMIN_SECRET`） |
+| POST | `/admin/moderation/:id/approve` | 管理员放行待审内容 |
+| POST | `/admin/moderation/:id/reject` | 管理员删除并记录违规，可同时指定处罚 |
+| GET / POST | `/admin/moderation/cleanup`、`/admin/moderation/cleanup/retry` | 查看并重试被拒媒体的持久化清理任务 |
+| GET | `/admin/bans` | 查看违规次数和设备处罚 |
+| POST / DELETE | `/admin/bans/:deviceId` | 设置或解除设备处罚 |
 | GET | `/updates/manifest` | Expo Updates 协议 manifest（按平台/runtime 返回签名更新或回滚指令） |
 | GET | `/updates/assets` | 下载 manifest 声明的 bundle、图片和字体资源 |
 | GET | `/updates/health` | 查看 OTA 存储状态与已发布 runtime |

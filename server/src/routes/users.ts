@@ -1,8 +1,9 @@
 import { Router } from 'express';
-import { ensureUser, findUserByRecoveryCode, listMessages, renameUser } from '../store';
-import { isAlive } from '../types';
+import { ensureUser, findUser, findUserByRecoveryCode, listMessages, renameUser } from '../store';
+import { isAlive, isPublished } from '../types';
 import { config, TTL_MS } from '../config';
 import { issueToken, tokenValid } from '../auth';
+import { consumeRegistration } from '../requestLimits';
 
 const router = Router();
 
@@ -20,6 +21,17 @@ router.post('/', async (req, res) => {
     return res.status(400).json({ error: 'device_id required' });
   }
   const deviceId = device_id.trim().slice(0, 64);
+  // Re-registering an existing installation remains free and idempotent. New
+  // anonymous identities are rate-limited so rotating device_id cannot create
+  // an unlimited supply of paid moderation identities.
+  const existing = await findUser(deviceId);
+  if (!existing) {
+    const limit = consumeRegistration(req.ip || 'unknown');
+    if (!limit.allowed) {
+      res.setHeader('Retry-After', String(limit.retryAfterSeconds));
+      return res.status(429).json({ error: '设备注册过于频繁，请稍后再试', code: 'rate_limited' });
+    }
+  }
   const u = await ensureUser(deviceId);
   const token = issueToken(deviceId);
   return res.json({ ...publicUser(u), ...(token ? { token } : {}) });
@@ -82,8 +94,9 @@ router.get('/me', async (req, res) => {
   const now = Date.now();
   const alive = (m: Parameters<typeof isAlive>[0]) => isAlive(m, now, TTL_MS, config.readLimit);
   const all = await listMessages();
+  const visible = all.filter(isPublished);
 
-  const mine = all
+  const mine = visible
     .filter((m) => m.deviceId === deviceId)
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((m) => ({
@@ -99,7 +112,7 @@ router.get('/me', async (req, res) => {
       alive: alive(m),
     }));
 
-  const footprints = all
+  const footprints = visible
     .filter((m) => m.readers.includes(deviceId) && m.deviceId !== deviceId)
     .sort((a, b) => b.createdAt - a.createdAt)
     .map((m) => {

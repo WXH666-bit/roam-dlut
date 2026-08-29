@@ -139,6 +139,40 @@ export const reclaimIdentity = async (code: string): Promise<ApiUser> => {
   return res.json();
 };
 
+/** 作者在后台审核入队后短轮询结果；接口不会暴露模型理由或分类。 */
+export const waitForMessagePublication = async (
+  id: string,
+  deviceId: string,
+  token?: string | null,
+  attempts = 8
+): Promise<'published' | 'pending'> => {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 750));
+    let res: Response;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3_000);
+    try {
+      res = await fetch(
+        `${BASE}/api/v1/messages/${encodeURIComponent(id)}/moderation-status?device_id=${encodeURIComponent(deviceId)}`,
+        {
+          headers: token ? { 'x-device-token': token } : undefined,
+          signal: controller.signal,
+        }
+      );
+    } catch {
+      return 'pending';
+    } finally {
+      clearTimeout(timeout);
+    }
+    // An administrator may already have rejected the row; do not disclose that
+    // decision through this lightweight author polling endpoint.
+    if (res.status === 404 || !res.ok) return 'pending';
+    const body = await res.json() as { status?: unknown };
+    if (body.status === 'published') return 'published';
+  }
+  return 'pending';
+};
+
 /**
  * 服务端文件：server/src/routes/messages.ts
  * 接口：GET /api/v1/messages
@@ -171,8 +205,9 @@ export const openMessage = async (id: string, deviceId: string, token?: string |
 /**
  * 服务端文件：server/src/routes/messages.ts
  * 接口：POST /api/v1/messages
+ * Header：x-device-id + x-device-token（服务端在读取大文件前完成预检）
  * Body：device_id: string, text: string(≤140), media_type: 'none'|'image'|'video'|'audio',
- *       media_key?: string, lat/lng: WGS-84 coordinates,
+ *       media_key/media_token?: string, lat/lng: WGS-84 coordinates,
  *       coordinate_system: 'wgs84', accuracy: number, captured_at: Unix ms
  */
 export const publishMessage = async (payload: {
@@ -180,20 +215,26 @@ export const publishMessage = async (payload: {
   text: string;
   mediaType: MessageMediaType;
   mediaKey?: string;
+  mediaToken?: string;
   lat: number;
   lng: number;
   coordinateSystem: string;
   accuracy: number;
   capturedAt: number;
-}): Promise<{ id: string; created_at: number }> => {
+}, token?: string | null): Promise<{
+  id: string;
+  created_at: number;
+  status: 'published' | 'pending';
+}> => {
   const res = await fetch(`${BASE}/api/v1/messages`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...(token ? { 'x-device-token': token } : {}) },
     body: JSON.stringify({
       device_id: payload.deviceId,
       text: payload.text,
       media_type: payload.mediaType,
       media_key: payload.mediaKey,
+      media_token: payload.mediaToken,
       lat: payload.lat,
       lng: payload.lng,
       coordinate_system: payload.coordinateSystem,
@@ -227,18 +268,31 @@ export const likeMessage = async (
 /**
  * 服务端文件：server/src/routes/upload.ts
  * 接口：POST /api/v1/upload
- * Body：multipart FormData，字段 file（图片、视频或音频，≤120MB）
+ * Body：multipart FormData，字段 file、device_id（图片、视频或音频，≤120MB）；
+ * 返回绑定设备、key 与媒体类型的一小时 upload_token。
+ * Header：x-device-token（服务端启用 SERVER_SECRET 时必需）
  */
 export const uploadMedia = async (
   fileUri: string,
   fileName: string,
-  mimeType: string
-): Promise<{ key: string; url: string; media_type: Exclude<MessageMediaType, 'none'> }> => {
+  mimeType: string,
+  deviceId: string,
+  token?: string | null
+): Promise<{
+  key: string;
+  media_type: Exclude<MessageMediaType, 'none'>;
+  upload_token: string;
+}> => {
   const form = new FormData();
   const file = await createFormDataFile(fileUri, fileName, mimeType);
   form.append('file', file as any);
+  form.append('device_id', deviceId);
   const res = await fetch(`${BASE}/api/v1/upload`, {
     method: 'POST',
+    headers: {
+      'x-device-id': deviceId,
+      ...(token ? { 'x-device-token': token } : {}),
+    },
     body: form,
   });
   if (!res.ok) throw await parseError(res);

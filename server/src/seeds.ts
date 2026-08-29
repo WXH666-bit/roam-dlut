@@ -88,6 +88,7 @@ export const buildSeedMessages = (now: number): Message[] =>
       lng: wgs84.lng,
       coordinateSystem: WGS84_COORDINATE_SYSTEM,
       createdAt,
+      moderationStatus: 'published',
       readers: fakeReaders(i, Math.min(s.readers ?? 0, 98)),
       likes: fakeReaders(i, Math.min(Math.floor((s.readers ?? 0) / 3), 30)),
     };

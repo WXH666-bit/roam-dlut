@@ -24,8 +24,17 @@ CREATE TABLE IF NOT EXISTS messages (
   accuracy DOUBLE NULL COMMENT '设备报告的水平定位精度（米）',
   captured_at BIGINT NULL COMMENT '设备获取定位的毫秒时间戳',
   created_at BIGINT NOT NULL COMMENT '毫秒时间戳',
+  moderation_status ENUM('published','pending') NOT NULL DEFAULT 'published' COMMENT '普通接口只返回 published',
+  moderation_model VARCHAR(64) NULL,
+  moderation_verdict ENUM('safe','review','error') NULL,
+  moderation_severity ENUM('low','medium','high','critical') NULL,
+  moderation_reason VARCHAR(500) NULL COMMENT '仅管理员可见，不返回普通客户端',
+  moderation_categories TEXT NULL COMMENT 'JSON 字符串数组',
+  moderation_requested_at BIGINT NULL,
+  moderation_decided_at BIGINT NULL,
   INDEX idx_messages_device (device_id),
-  INDEX idx_messages_created (created_at)
+  INDEX idx_messages_created (created_at),
+  INDEX idx_messages_moderation (moderation_status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 存量库升级（服务端 init() 会逐列检查并安全补齐；普通用户坐标不会被改写）：
@@ -33,6 +42,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- ALTER TABLE messages ADD COLUMN accuracy DOUBLE NULL;
 -- ALTER TABLE messages ADD COLUMN captured_at BIGINT NULL;
 -- ALTER TABLE messages MODIFY COLUMN media_type ENUM('none','image','video','audio') NOT NULL DEFAULT 'none';
+-- 审核列由新版服务端 init() 自动补齐；旧消息会通过 DEFAULT 保持 published。
 -- 仅 seed-device 下固定的 seed-01…seed-40 会由服务端一次性从 GCJ-02 转为 WGS-84。
 
 -- 阅读记录：按设备去重；剩余可读名额 = READ_LIMIT - 本表计数
@@ -49,6 +59,59 @@ CREATE TABLE IF NOT EXISTS message_likes (
   message_id VARCHAR(32) NOT NULL,
   device_id VARCHAR(64) NOT NULL,
   PRIMARY KEY (message_id, device_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 管理员审核日志不保留被删除的正文/媒体，只记录决策元数据。
+CREATE TABLE IF NOT EXISTS moderation_reviews (
+  id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT PRIMARY KEY,
+  message_id VARCHAR(32) NOT NULL,
+  device_id VARCHAR(64) NOT NULL,
+  decision ENUM('approve','reject') NOT NULL,
+  reviewer_id VARCHAR(64) NOT NULL,
+  reason VARCHAR(500) NULL,
+  created_at BIGINT NOT NULL,
+  UNIQUE KEY uq_moderation_review_message (message_id),
+  INDEX idx_moderation_reviews_device (device_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 拒绝内容的媒体清理任务：审核事务只删除消息记录，实际对象删除失败时
+-- 保留 media_key，供管理员/后台任务重试；成功后将 media_key 清空。
+CREATE TABLE IF NOT EXISTS media_cleanup_tasks (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  message_id VARCHAR(32) NOT NULL,
+  media_key VARCHAR(512) NULL,
+  attempt INT UNSIGNED NOT NULL DEFAULT 0,
+  error VARCHAR(500) NULL,
+  created_at BIGINT NOT NULL,
+  updated_at BIGINT NOT NULL,
+  UNIQUE KEY uq_media_cleanup_message (message_id),
+  INDEX idx_media_cleanup_pending (media_key, updated_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 已上传但尚未被留言认领的临时媒体；过期后由后台清理对象并删除登记。
+-- media_key 同时作为一次性认领的幂等键，认领与消息插入在同一事务内完成。
+CREATE TABLE IF NOT EXISTS media_uploads (
+  media_key VARCHAR(512) NOT NULL PRIMARY KEY,
+  device_id VARCHAR(64) NOT NULL,
+  media_type ENUM('image','video','audio') NOT NULL,
+  expires_at BIGINT NOT NULL,
+  created_at BIGINT NOT NULL,
+  attempts INT UNSIGNED NOT NULL DEFAULT 0,
+  error VARCHAR(500) NULL,
+  updated_at BIGINT NOT NULL,
+  cleanup_lease_until BIGINT NULL,
+  INDEX idx_media_uploads_expiry (expires_at, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 只在管理员确认违规后增加 violation_count；模型判断本身不会封禁。
+CREATE TABLE IF NOT EXISTS device_moderation (
+  device_id VARCHAR(64) NOT NULL PRIMARY KEY,
+  violation_count INT UNSIGNED NOT NULL DEFAULT 0,
+  banned_until BIGINT NULL,
+  permanent TINYINT(1) NOT NULL DEFAULT 0,
+  reason VARCHAR(500) NULL,
+  updated_at BIGINT NOT NULL,
+  INDEX idx_device_moderation_updated (updated_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 通知事件：id 是全局单调游标，客户端只拿事件类型和留言 id，不返回正文或坐标

@@ -28,7 +28,7 @@ import { StickerIcon } from '@/components/StickerIcon';
 import { useApp } from '@/contexts/AppContext';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
-import { publishMessage, uploadMedia } from '@/utils/api';
+import { publishMessage, uploadMedia, waitForMessagePublication } from '@/utils/api';
 import {
   isFreshLiveLocation,
   LOCATION_COORDINATE_SYSTEM,
@@ -73,6 +73,7 @@ export default function ComposeScreen() {
   const handwriting = useHandwritingFont();
   const {
     deviceId,
+    deviceToken,
     location,
     locationFix,
     getLatestLocationFix,
@@ -97,6 +98,7 @@ export default function ComposeScreen() {
   const [media, setMedia] = useState<PickedMedia | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
+  const [pending, setPending] = useState(false);
   const [chooserKind, setChooserKind] = useState<'image' | 'video' | 'audio' | null>(null);
   const [recordingModalVisible, setRecordingModalVisible] = useState(false);
   const [recordingStarting, setRecordingStarting] = useState(false);
@@ -437,10 +439,12 @@ export default function ComposeScreen() {
     try {
       let mediaType: MessageMediaType = 'none';
       let mediaKey: string | undefined;
+      let mediaToken: string | undefined;
       if (media) {
-        const uploaded = await uploadMedia(media.uri, media.fileName, media.mimeType);
-        mediaType = media.kind;
+        const uploaded = await uploadMedia(media.uri, media.fileName, media.mimeType, deviceId, deviceToken);
+        mediaType = uploaded.media_type;
         mediaKey = uploaded.key;
+        mediaToken = uploaded.upload_token;
       }
 
       // Uploading a video can take long enough for the original fix to age
@@ -468,18 +472,26 @@ export default function ComposeScreen() {
           accuracy: currentFix?.accuracy ?? 0,
           capturedAt: currentFix?.timestamp ?? Date.now(),
         };
-      await publishMessage({
+      const result = await publishMessage({
         deviceId,
         text: text.trim(),
         mediaType,
         mediaKey,
+        mediaToken,
         lat: currentLocation.lat,
         lng: currentLocation.lng,
         ...locationMetadata,
-      });
-      await refreshMessages();
-      Toast.show({ type: 'success', text1: '已藏在此地，等一个路过的人。' });
-      setPublished(true);
+      }, deviceToken);
+      const finalStatus = result.status === 'pending'
+        ? await waitForMessagePublication(result.id, deviceId, deviceToken)
+        : result.status;
+      if (finalStatus === 'pending') {
+        setPending(true);
+      } else {
+        await refreshMessages();
+        Toast.show({ type: 'success', text1: '已藏在此地，等一个路过的人。' });
+        setPublished(true);
+      }
     } catch (e) {
       const raw = e instanceof Error ? e.message : '';
       const msg =
@@ -493,6 +505,10 @@ export default function ComposeScreen() {
                 : '这张图片太大了，换一张试试'
             : raw === 'unsupported_media_type'
               ? '这个媒体格式暂时不支持'
+            : raw === 'media_signature_mismatch'
+              ? '文件内容与格式不一致，换一个文件试试'
+            : raw === 'upload_busy'
+              ? '现在上传的人有点多，稍后再试'
             : raw || '没藏成功，再试一次';
       Toast.show({ type: 'error', text1: msg });
     } finally {
@@ -519,6 +535,26 @@ export default function ComposeScreen() {
             style={{ marginTop: 34 }}
           />
           <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={{ marginTop: 26, padding: 8 }}>
+            <Text style={{ fontSize: 13.5, color: '#8E8BA3' }}>好了，回去</Text>
+          </TouchableOpacity>
+        </View>
+      </Screen>
+    );
+  }
+
+  if (pending) {
+    return (
+      <Screen backgroundColor="#0B0E23">
+        <NightSky />
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 32 }}>
+          <StickerIcon id="envelope" size={50} />
+          <Text style={{ marginTop: 26, fontFamily: handwriting, fontSize: 20, color: '#FFE3A3', letterSpacing: 1.5, textAlign: 'center' }}>
+            已提交，审核通过后会藏在这里
+          </Text>
+          <Text style={{ marginTop: 14, fontSize: 13, color: 'rgba(237,231,246,0.6)', letterSpacing: 1, textAlign: 'center' }}>
+            审核完成后，符合规则的内容会正常出现
+          </Text>
+          <TouchableOpacity onPress={() => router.back()} hitSlop={10} style={{ marginTop: 34, padding: 8 }}>
             <Text style={{ fontSize: 13.5, color: '#8E8BA3' }}>好了，回去</Text>
           </TouchableOpacity>
         </View>
@@ -681,13 +717,19 @@ export default function ComposeScreen() {
           }}
         >
           {publishing ? (
-            <ActivityIndicator color="#0B0E23" />
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+              <ActivityIndicator color="#0B0E23" />
+              <Text style={{ fontSize: 14, fontWeight: '700', color: '#0B0E23' }}>正在进行安全检查…</Text>
+            </View>
           ) : (
             <Text style={{ fontSize: 16, fontWeight: '700', color: '#0B0E23', letterSpacing: 2 }}>藏在此地</Text>
           )}
         </TouchableOpacity>
         <Text style={{ marginTop: 14, textAlign: 'center', fontSize: 12, color: 'rgba(142,139,163,0.85)', letterSpacing: 0.5 }}>
           它会藏在你现在的位置，等一个路过的人 · 30 天或 99 人读到后消散
+        </Text>
+        <Text style={{ marginTop: 5, textAlign: 'center', fontSize: 11, color: 'rgba(142,139,163,0.68)' }}>
+          提交后，正文与附件会用于 AI 内容安全审核
         </Text>
         {/* 当前位置状态行：坐标/定位中/权限引导/重试，小字不抢主文案 */}
         <View style={{ marginTop: 8, flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', alignItems: 'center', gap: 8 }}>
