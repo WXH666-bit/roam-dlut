@@ -15,6 +15,7 @@ import { mediaUrlOf } from '../storage';
 import { tokenValid } from '../auth';
 import { sendLikeNotification } from '../notifications';
 import { validatePublishLocation } from '../location';
+import { isMessageMediaType } from '../media';
 
 const router = Router();
 
@@ -89,7 +90,10 @@ router.post('/', async (req, res) => {
   if (!location.ok) {
     return res.status(400).json({ error: location.message, code: location.code });
   }
-  const mt = media_type === 'image' || media_type === 'video' ? media_type : 'none';
+  if (media_type != null && !isMessageMediaType(media_type)) {
+    return res.status(400).json({ error: 'invalid_media_type' });
+  }
+  const mt = media_type ?? 'none';
   if (mt !== 'none' && (typeof media_key !== 'string' || !media_key)) {
     return res.status(400).json({ error: 'media_key required for media message' });
   }

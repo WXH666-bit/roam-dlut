@@ -8,6 +8,7 @@
     "preinstall": "npx only-allow pnpm",
     "start": "node dist/index.js",
     "lint": "tsc --noEmit",
+    "test": "tsx --test src/location.test.ts src/media.test.ts src/updates/protocol.test.ts",
     "test:ota": "tsx --test src/updates/protocol.test.ts"
   },
   "dependencies": {

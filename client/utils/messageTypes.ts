@@ -1,1 +1,1 @@
-export type MessageMediaType = 'none' | 'image' | 'video';
+export type MessageMediaType = 'none' | 'image' | 'video' | 'audio';

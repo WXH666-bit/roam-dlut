@@ -171,7 +171,7 @@ export const openMessage = async (id: string, deviceId: string, token?: string |
 /**
  * 服务端文件：server/src/routes/messages.ts
  * 接口：POST /api/v1/messages
- * Body：device_id: string, text: string(≤140), media_type: 'none'|'image'|'video',
+ * Body：device_id: string, text: string(≤140), media_type: 'none'|'image'|'video'|'audio',
  *       media_key?: string, lat/lng: WGS-84 coordinates,
  *       coordinate_system: 'wgs84', accuracy: number, captured_at: Unix ms
  */
@@ -227,13 +227,13 @@ export const likeMessage = async (
 /**
  * 服务端文件：server/src/routes/upload.ts
  * 接口：POST /api/v1/upload
- * Body：multipart FormData，字段 file（图片或视频，≤120MB）
+ * Body：multipart FormData，字段 file（图片、视频或音频，≤120MB）
  */
 export const uploadMedia = async (
   fileUri: string,
   fileName: string,
   mimeType: string
-): Promise<{ key: string; url: string }> => {
+): Promise<{ key: string; url: string; media_type: Exclude<MessageMediaType, 'none'> }> => {
   const form = new FormData();
   const file = await createFormDataFile(fileUri, fileName, mimeType);
   form.append('file', file as any);

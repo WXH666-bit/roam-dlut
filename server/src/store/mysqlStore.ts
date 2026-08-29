@@ -63,7 +63,7 @@ export class MysqlStore implements DataStore {
       device_id VARCHAR(64) NOT NULL,
       flower_name VARCHAR(32) NOT NULL,
       text VARCHAR(600) NOT NULL,
-      media_type ENUM('none','image','video') NOT NULL DEFAULT 'none',
+      media_type ENUM('none','image','video','audio') NOT NULL DEFAULT 'none',
       media_key VARCHAR(512) NULL,
       lat DOUBLE NOT NULL,
       lng DOUBLE NOT NULL,
@@ -77,7 +77,7 @@ export class MysqlStore implements DataStore {
     // Keep existing deployments readable without rewriting their coordinates.
     // NULL means the pre-metadata (implicitly WGS-84) API shape.
     const [messageColumns] = await this.pool.query<mysql.RowDataPacket[]>(
-      `SELECT COLUMN_NAME AS column_name FROM information_schema.COLUMNS
+      `SELECT COLUMN_NAME AS column_name, COLUMN_TYPE AS column_type FROM information_schema.COLUMNS
        WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'messages'`
     );
     const messageColumnNames = new Set(
@@ -96,6 +96,14 @@ export class MysqlStore implements DataStore {
     if (!messageColumnNames.has('captured_at')) {
       await this.pool.query(
         'ALTER TABLE messages ADD COLUMN captured_at BIGINT NULL'
+      );
+    }
+    const mediaTypeColumn = messageColumns.find(
+      (row) => String(row.column_name).toLowerCase() === 'media_type'
+    );
+    if (!String(mediaTypeColumn?.column_type ?? '').toLowerCase().includes("'audio'")) {
+      await this.pool.query(
+        "ALTER TABLE messages MODIFY COLUMN media_type ENUM('none','image','video','audio') NOT NULL DEFAULT 'none'"
       );
     }
     // One-time, narrowly scoped migration for the reserved built-in demo

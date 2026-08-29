@@ -2,7 +2,7 @@ import type { StoredLocationMetadata } from './location';
 
 export type { CoordinateSystem, StoredLocationMetadata } from './location';
 
-export type MediaType = 'none' | 'image' | 'video';
+export type MediaType = 'none' | 'image' | 'video' | 'audio';
 
 export interface Message extends StoredLocationMetadata {
   id: string;

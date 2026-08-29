@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,11 +13,14 @@ import {
 } from 'react-native';
 import { Image } from 'expo-image';
 import * as ImagePicker from 'expo-image-picker';
+import * as DocumentPicker from 'expo-document-picker';
 import { Camera } from 'expo-camera';
+import { Audio } from 'expo-av';
 import { FontAwesome6 } from '@expo/vector-icons';
 import Toast from 'react-native-toast-message';
 import dayjs from 'dayjs';
 import { Screen } from '@/components/Screen';
+import { AudioAttachmentPlayer } from '@/components/AudioAttachmentPlayer';
 import { NightSky } from '@/components/NightSky';
 import { ShareSecretEntry } from '@/components/ShareSecretEntry';
 import { RichText } from '@/components/RichText';
@@ -32,19 +35,37 @@ import {
   LOCATION_MAX_ACCURACY_METERS,
 } from '@/utils/location';
 import { STICKERS, stickerToken } from '@/utils/stickers';
+import {
+  MEDIA_MAX_BYTES,
+  VIDEO_MAX_DURATION_MS,
+  VIDEO_MAX_DURATION_SECONDS,
+  fileExtensionOf,
+  formatMediaDuration,
+  imagePickerVideoDurationMs,
+  resolveSupportedAudioFile,
+} from '@/utils/media';
 import type { MessageMediaType } from '@/utils/messageTypes';
 
 const MAX_LEN = 140;
 const INK = '#3E3626';
 const PAPER = '#F6EFDD';
-// 与服务端 multer 上限（server/src/routes/upload.ts）保持一致
-const MEDIA_MAX_BYTES = 120 * 1024 * 1024;
+const MIN_RECORDING_DURATION_MS = 700;
+
+const restorePlaybackAudioMode = (): Promise<void> => Audio.setAudioModeAsync({
+  allowsRecordingIOS: false,
+  playsInSilentModeIOS: true,
+  staysActiveInBackground: false,
+  shouldDuckAndroid: true,
+  playThroughEarpieceAndroid: false,
+});
 
 interface PickedMedia {
   uri: string;
-  kind: 'image' | 'video';
+  kind: 'image' | 'video' | 'audio';
   mimeType: string;
   fileName: string;
+  displayName?: string;
+  durationMs?: number;
 }
 
 export default function ComposeScreen() {
@@ -76,9 +97,35 @@ export default function ComposeScreen() {
   const [media, setMedia] = useState<PickedMedia | null>(null);
   const [publishing, setPublishing] = useState(false);
   const [published, setPublished] = useState(false);
-  const [chooserKind, setChooserKind] = useState<'image' | 'video' | null>(null);
+  const [chooserKind, setChooserKind] = useState<'image' | 'video' | 'audio' | null>(null);
+  const [recordingModalVisible, setRecordingModalVisible] = useState(false);
+  const [recordingStarting, setRecordingStarting] = useState(false);
+  const [recordingStopping, setRecordingStopping] = useState(false);
+  const [recordingDurationMs, setRecordingDurationMs] = useState(0);
+  const recordingRef = useRef<Audio.Recording | null>(null);
+  const recordingSessionRef = useRef(0);
+  const recordingOperationRef = useRef(false);
+  const mediaActionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const screenMountedRef = useRef(true);
   const selectionRef = useRef({ start: 0, end: 0 });
   const inputRef = useRef<TextInput>(null);
+
+  useEffect(() => {
+    screenMountedRef.current = true;
+    return () => {
+      screenMountedRef.current = false;
+      recordingSessionRef.current += 1;
+      if (mediaActionTimeoutRef.current) {
+        clearTimeout(mediaActionTimeoutRef.current);
+        mediaActionTimeoutRef.current = null;
+      }
+      const active = recordingRef.current;
+      recordingRef.current = null;
+      active?.setOnRecordingStatusUpdate(null);
+      if (active) void active.stopAndUnloadAsync().catch(() => undefined);
+      void restorePlaybackAudioMode().catch(() => undefined);
+    };
+  }, []);
 
   const insertSticker = (id: string) => {
     const token = stickerToken(id);
@@ -101,18 +148,32 @@ export default function ComposeScreen() {
     if (asset.fileSize != null && asset.fileSize > MEDIA_MAX_BYTES) {
       Toast.show({
         type: 'info',
-        text1: kind === 'video' ? '视频太大了，试试录短一点' : '这张图片太大了，换一张试试',
+        text1: kind === 'video'
+          ? '视频超过 120MB，压缩或降低清晰度后再试'
+          : '这张图片太大了，换一张试试',
       });
+      return;
+    }
+    const durationMs = kind === 'video'
+      ? imagePickerVideoDurationMs(
+        asset,
+        Platform.OS === 'web' ? 'web' : Platform.OS === 'ios' ? 'ios' : 'android'
+      )
+      : null;
+    if (durationMs != null && durationMs > VIDEO_MAX_DURATION_MS) {
+      Toast.show({ type: 'info', text1: '视频最长可以留 2 分钟' });
       return;
     }
     const mimeType =
       asset.mimeType ?? (kind === 'image' ? 'image/jpeg' : 'video/mp4');
-    const ext = asset.uri.split('.').pop()?.split('?')[0] || (kind === 'image' ? 'jpg' : 'mp4');
+    const ext = fileExtensionOf(asset.fileName ?? asset.uri) || (kind === 'image' ? 'jpg' : 'mp4');
     setMedia({
       uri: asset.uri,
       kind,
       mimeType,
-      fileName: `cidi_${Date.now()}.${ext}`,
+      fileName: `here_${Date.now()}.${ext}`,
+      displayName: asset.fileName ?? (kind === 'image' ? '一张照片' : '一段视频'),
+      ...(durationMs != null ? { durationMs } : {}),
     });
   };
 
@@ -120,7 +181,7 @@ export default function ComposeScreen() {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: kind === 'image' ? ['images'] : ['videos'],
       quality: 0.85,
-      videoMaxDuration: 60,
+      videoMaxDuration: VIDEO_MAX_DURATION_SECONDS,
       allowsMultipleSelection: false,
     });
     if (result.canceled || !result.assets?.[0]) return;
@@ -130,7 +191,9 @@ export default function ComposeScreen() {
   const promptPermission = (what: string) => {
     Alert.alert(
       `需要${what}权限`,
-      `想把此刻的画面留下来，需要先用一下${what}。`,
+      what === '麦克风'
+        ? '想把此刻的声音留下来，需要先使用麦克风。'
+        : `想把此刻的画面留下来，需要先使用${what}。`,
       [
         { text: '下次吧', style: 'cancel' },
         { text: '去设置', onPress: () => Linking.openSettings() },
@@ -154,26 +217,198 @@ export default function ComposeScreen() {
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: kind === 'image' ? ['images'] : ['videos'],
       quality: 0.85,
-      ...(kind === 'video' ? { videoMaxDuration: 60 } : {}),
+      ...(kind === 'video' ? { videoMaxDuration: VIDEO_MAX_DURATION_SECONDS } : {}),
     });
     if (result.canceled || !result.assets?.[0]) return;
     acceptAsset(result.assets[0], kind);
   };
 
-  // 等选择层收起动画结束再调起相机/相册，避免 iOS 上两层视图互相抢占
-  const chooseMediaSource = (action: 'camera' | 'library') => {
+  const pickAudioFile = async () => {
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: 'audio/*',
+        copyToCacheDirectory: true,
+        multiple: false,
+        base64: false,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      const asset = result.assets[0];
+      if (asset.size != null && asset.size > MEDIA_MAX_BYTES) {
+        Toast.show({ type: 'info', text1: '这个音频文件太大了，换一个试试' });
+        return;
+      }
+      const audio = resolveSupportedAudioFile(asset.name, asset.mimeType);
+      if (!audio) {
+        Toast.show({
+          type: 'info',
+          text1: '暂时支持 MP3、M4A、AAC、WAV 和 FLAC',
+        });
+        return;
+      }
+      setMedia({
+        uri: asset.uri,
+        kind: 'audio',
+        mimeType: audio.mimeType,
+        fileName: `here_${Date.now()}.${audio.extension}`,
+        displayName: asset.name,
+      });
+    } catch {
+      Toast.show({ type: 'error', text1: '没有读到这个音频文件，再试一次' });
+    }
+  };
+
+  const beginAudioRecording = async () => {
+    if (
+      !screenMountedRef.current
+      || recordingRef.current
+      || recordingOperationRef.current
+    ) return;
+    recordingOperationRef.current = true;
+    const session = recordingSessionRef.current + 1;
+    recordingSessionRef.current = session;
+    setRecordingDurationMs(0);
+    setRecordingStarting(true);
+    setRecordingModalVisible(true);
+    let createdRecording: Audio.Recording | null = null;
+    let keepRecording = false;
+    try {
+      const permission = await Audio.requestPermissionsAsync();
+      if (recordingSessionRef.current !== session) return;
+      if (!permission.granted) {
+        setRecordingStarting(false);
+        setRecordingModalVisible(false);
+        promptPermission('麦克风');
+        return;
+      }
+      await Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+      const created = await Audio.Recording.createAsync(
+        Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        (status) => {
+          if (recordingSessionRef.current === session) {
+            setRecordingDurationMs(status.durationMillis);
+          }
+        },
+        200
+      );
+      createdRecording = created.recording;
+      if (recordingSessionRef.current !== session) return;
+      recordingRef.current = createdRecording;
+      keepRecording = true;
+      setRecordingDurationMs(created.status.durationMillis);
+      setRecordingStarting(false);
+    } catch {
+      if (screenMountedRef.current && recordingSessionRef.current === session) {
+        setRecordingStarting(false);
+        setRecordingModalVisible(false);
+        Toast.show({ type: 'error', text1: '录音没有开始，再试一次' });
+      }
+    } finally {
+      if (!keepRecording) {
+        createdRecording?.setOnRecordingStatusUpdate(null);
+        if (createdRecording) {
+          await createdRecording.stopAndUnloadAsync().catch(() => undefined);
+        }
+        await restorePlaybackAudioMode().catch(() => undefined);
+      }
+      recordingOperationRef.current = false;
+    }
+  };
+
+  const cancelRecording = async () => {
+    recordingSessionRef.current += 1;
+    const active = recordingRef.current;
+    recordingRef.current = null;
+    setRecordingStarting(false);
+    setRecordingModalVisible(false);
+    if (!active) return;
+    recordingOperationRef.current = true;
+    setRecordingStopping(true);
+    try {
+      active.setOnRecordingStatusUpdate(null);
+      await active.stopAndUnloadAsync();
+    } catch {
+      // A very short Android recording can contain no samples; cancellation can ignore it.
+    } finally {
+      if (screenMountedRef.current) {
+        setRecordingStopping(false);
+        setRecordingDurationMs(0);
+      }
+      await restorePlaybackAudioMode().catch(() => undefined);
+      recordingOperationRef.current = false;
+    }
+  };
+
+  const saveRecording = async () => {
+    const active = recordingRef.current;
+    if (
+      !active
+      || recordingOperationRef.current
+      || recordingDurationMs < MIN_RECORDING_DURATION_MS
+    ) return;
+    recordingOperationRef.current = true;
+    recordingSessionRef.current += 1;
+    recordingRef.current = null;
+    active.setOnRecordingStatusUpdate(null);
+    setRecordingStopping(true);
+    try {
+      const status = await active.stopAndUnloadAsync();
+      const uri = active.getURI();
+      if (!uri || status.durationMillis < MIN_RECORDING_DURATION_MS) {
+        throw new Error('recording_too_short');
+      }
+      const audio = resolveSupportedAudioFile(
+        uri,
+        Platform.OS === 'web' ? 'audio/webm' : 'audio/mp4'
+      );
+      if (!audio) throw new Error('recording_format_unknown');
+      setMedia({
+        uri,
+        kind: 'audio',
+        mimeType: audio.mimeType,
+        fileName: `here_recording_${Date.now()}.${audio.extension}`,
+        displayName: '现场录音',
+        durationMs: status.durationMillis,
+      });
+      setRecordingModalVisible(false);
+      setRecordingDurationMs(0);
+    } catch (error) {
+      const message = error instanceof Error && error.message === 'recording_too_short'
+        ? '录音太短了，再多说一点吧'
+        : '没有保存好这段录音，再试一次';
+      Toast.show({ type: 'error', text1: message });
+      setRecordingModalVisible(false);
+    } finally {
+      if (screenMountedRef.current) setRecordingStopping(false);
+      await restorePlaybackAudioMode().catch(() => undefined);
+      recordingOperationRef.current = false;
+    }
+  };
+
+  // 等选择层收起动画结束再调起系统界面，避免 iOS 上两层视图互相抢占
+  const chooseMediaSource = (action: 'camera' | 'library' | 'record' | 'file') => {
     const kind = chooserKind;
     setChooserKind(null);
     if (!kind) return;
-    setTimeout(() => {
-      if (action === 'camera') void captureNow(kind);
-      else void pickFromLibrary(kind);
+    if (mediaActionTimeoutRef.current) clearTimeout(mediaActionTimeoutRef.current);
+    mediaActionTimeoutRef.current = setTimeout(() => {
+      mediaActionTimeoutRef.current = null;
+      if (!screenMountedRef.current) return;
+      if (action === 'record') void beginAudioRecording();
+      else if (action === 'file') void pickAudioFile();
+      else if (kind !== 'audio' && action === 'camera') void captureNow(kind);
+      else if (kind !== 'audio') void pickFromLibrary(kind);
     }, 280);
   };
 
-  const onMediaButton = (kind: 'image' | 'video') => {
+  const onMediaButton = (kind: 'image' | 'video' | 'audio') => {
     // web 端没有相机，保持原来的直开相册行为
-    if (Platform.OS === 'web') void pickFromLibrary(kind);
+    if (Platform.OS === 'web' && kind !== 'audio') void pickFromLibrary(kind);
     else setChooserKind(kind);
   };
 
@@ -252,8 +487,12 @@ export default function ComposeScreen() {
           ? '定位已过期或精度不足，等实时定位（精度≤30米）再藏'
           : raw === 'file_too_large'
             ? media?.kind === 'video'
-              ? '视频太大了，试试录短一点'
-              : '这张图片太大了，换一张试试'
+              ? '视频超过 120MB，压缩或降低清晰度后再试'
+              : media?.kind === 'audio'
+                ? '这个音频文件太大了，换一个试试'
+                : '这张图片太大了，换一张试试'
+            : raw === 'unsupported_media_type'
+              ? '这个媒体格式暂时不支持'
             : raw || '没藏成功，再试一次';
       Toast.show({ type: 'error', text1: msg });
     } finally {
@@ -368,22 +607,40 @@ export default function ComposeScreen() {
 
         {/* 媒体 */}
         <Text style={{ marginTop: 20, marginBottom: 10, fontSize: 12.5, color: 'rgba(142,139,163,0.9)', letterSpacing: 1 }}>
-          也可以留下一点画面（可选）
+          也可以留下一点声音或画面（可选）
         </Text>
         {!media ? (
-          <View style={{ flexDirection: 'row', gap: 12 }}>
-            <MediaButton icon="image" label="一张照片" onPress={() => onMediaButton('image')} />
-            <MediaButton icon="video" label="一段视频（≤60秒）" onPress={() => onMediaButton('video')} />
+          <View style={{ gap: 10 }}>
+            <View style={{ flexDirection: 'row', gap: 10 }}>
+              <MediaButton icon="image" label="一张照片" onPress={() => onMediaButton('image')} />
+              <MediaButton icon="video" label="一段视频（≤2分钟）" onPress={() => onMediaButton('video')} />
+            </View>
+            <MediaButton
+              icon="music"
+              label="一段录音或音乐"
+              wide
+              onPress={() => onMediaButton('audio')}
+            />
+            <Text style={{ textAlign: 'center', fontSize: 10.5, color: 'rgba(142,139,163,0.7)' }}>
+              视频最长 2 分钟 · 单个媒体文件不超过 120MB
+            </Text>
           </View>
         ) : (
           <View style={{ borderRadius: 16, overflow: 'hidden', borderWidth: 1, borderColor: 'rgba(255,255,255,0.12)' }}>
             {media.kind === 'image' ? (
               <Image source={{ uri: media.uri }} style={{ width: '100%', height: 200 }} contentFit="cover" />
-            ) : (
+            ) : media.kind === 'video' ? (
               <View style={{ width: '100%', height: 120, alignItems: 'center', justifyContent: 'center', backgroundColor: 'rgba(255,255,255,0.06)' }}>
                 <FontAwesome6 name="video" size={22} color="#F5C26B" />
-                <Text style={{ marginTop: 8, fontSize: 12, color: '#8E8BA3' }}>已选好一段视频</Text>
+                <Text style={{ marginTop: 8, fontSize: 12, color: '#8E8BA3' }}>
+                  已选好一段视频{media.durationMs != null ? ` · ${formatMediaDuration(media.durationMs)}` : ''}
+                </Text>
               </View>
+            ) : (
+              <AudioAttachmentPlayer
+                uri={media.uri}
+                label={media.displayName ?? '一段声音'}
+              />
             )}
             <TouchableOpacity
               onPress={() => setMedia(null)}
@@ -483,7 +740,7 @@ export default function ComposeScreen() {
         </View>
       </ScrollView>
 
-      {/* 媒体来源选择层（原生端；web 直开相册不经过这里） */}
+      {/* 媒体来源选择层 */}
       <Modal
         visible={chooserKind !== null}
         transparent
@@ -506,22 +763,142 @@ export default function ComposeScreen() {
               }}
             >
               <Text style={{ fontFamily: handwriting, fontSize: 17, color: '#EDE7F6', textAlign: 'center', marginBottom: 14, letterSpacing: 1 }}>
-                {chooserKind === 'video' ? '这段画面，从哪里来？' : '这张照片，从哪里来？'}
+                {chooserKind === 'audio'
+                  ? '这段声音，从哪里来？'
+                  : chooserKind === 'video'
+                    ? '这段画面，从哪里来？'
+                    : '这张照片，从哪里来？'}
               </Text>
-              <ChooserOption
-                icon={chooserKind === 'video' ? 'video' : 'camera'}
-                label="现场拍摄"
-                onPress={() => chooseMediaSource('camera')}
-              />
-              <View style={{ height: 10 }} />
-              <ChooserOption
-                icon="images"
-                label="从相册选"
-                onPress={() => chooseMediaSource('library')}
-              />
+              {chooserKind === 'audio' ? (
+                <>
+                  <ChooserOption
+                    icon="microphone"
+                    label="现场录音"
+                    onPress={() => chooseMediaSource('record')}
+                  />
+                  <View style={{ height: 10 }} />
+                  <ChooserOption
+                    icon="folder-open"
+                    label="选择已有录音或音乐"
+                    onPress={() => chooseMediaSource('file')}
+                  />
+                  <Text style={{ marginTop: 11, textAlign: 'center', fontSize: 11, color: '#8E8BA3' }}>
+                    支持 MP3、M4A、AAC、WAV、FLAC
+                  </Text>
+                </>
+              ) : (
+                <>
+                  <ChooserOption
+                    icon={chooserKind === 'video' ? 'video' : 'camera'}
+                    label="现场拍摄"
+                    onPress={() => chooseMediaSource('camera')}
+                  />
+                  <View style={{ height: 10 }} />
+                  <ChooserOption
+                    icon="images"
+                    label="从相册选"
+                    onPress={() => chooseMediaSource('library')}
+                  />
+                </>
+              )}
             </View>
           </View>
         </TouchableOpacity>
+      </Modal>
+
+      {/* 现场录音层 */}
+      <Modal
+        visible={recordingModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => void cancelRecording()}
+      >
+        <View
+          style={{
+            flex: 1,
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 28,
+            backgroundColor: 'rgba(5,7,18,0.76)',
+          }}
+        >
+          <View
+            style={{
+              width: '100%',
+              maxWidth: 360,
+              borderRadius: 24,
+              padding: 24,
+              alignItems: 'center',
+              backgroundColor: '#1A1C3E',
+              borderWidth: 1,
+              borderColor: 'rgba(255,255,255,0.12)',
+            }}
+          >
+            {recordingStarting ? (
+              <>
+                <ActivityIndicator color="#A79BFA" />
+                <Text style={{ marginTop: 14, color: '#EDE7F6', fontSize: 14 }}>
+                  正在准备麦克风…
+                </Text>
+              </>
+            ) : (
+              <>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 9 }}>
+                  <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: '#F26D7D' }} />
+                  <Text style={{ color: '#EDE7F6', fontSize: 14, letterSpacing: 1 }}>正在录音</Text>
+                </View>
+                <Text
+                  style={{
+                    marginTop: 22,
+                    fontSize: 42,
+                    color: '#FFE3A3',
+                    fontVariant: ['tabular-nums'],
+                  }}
+                >
+                  {formatMediaDuration(recordingDurationMs)}
+                </Text>
+                <Text style={{ marginTop: 8, fontSize: 12, color: '#8E8BA3' }}>
+                  说完后点下面的按钮保存
+                </Text>
+                <TouchableOpacity
+                  onPress={() => void saveRecording()}
+                  disabled={recordingStopping || recordingDurationMs < MIN_RECORDING_DURATION_MS}
+                  style={{
+                    marginTop: 24,
+                    height: 50,
+                    alignSelf: 'stretch',
+                    borderRadius: 999,
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 9,
+                    backgroundColor: recordingDurationMs < MIN_RECORDING_DURATION_MS
+                      ? 'rgba(245,194,107,0.35)'
+                      : '#F5C26B',
+                  }}
+                >
+                  {recordingStopping ? (
+                    <ActivityIndicator color="#0B0E23" />
+                  ) : (
+                    <>
+                      <FontAwesome6 name="stop" size={13} color="#0B0E23" />
+                      <Text style={{ color: '#0B0E23', fontWeight: '700', fontSize: 14 }}>
+                        停止并保存
+                      </Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
+            )}
+            <TouchableOpacity
+              onPress={() => void cancelRecording()}
+              disabled={recordingStopping}
+              style={{ marginTop: 16, paddingVertical: 7, paddingHorizontal: 20 }}
+            >
+              <Text style={{ color: '#8E8BA3', fontSize: 13 }}>取消这次录音</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
       </Modal>
     </Screen>
   );
@@ -550,12 +927,22 @@ function ChooserOption({ icon, label, onPress }: { icon: string; label: string; 
   );
 }
 
-function MediaButton({ icon, label, onPress }: { icon: string; label: string; onPress: () => void }) {
+function MediaButton({
+  icon,
+  label,
+  onPress,
+  wide = false,
+}: {
+  icon: string;
+  label: string;
+  onPress: () => void;
+  wide?: boolean;
+}) {
   return (
     <TouchableOpacity
       onPress={onPress}
       style={{
-        flex: 1,
+        ...(wide ? { width: '100%' } : { flex: 1 }),
         height: 48,
         borderRadius: 14,
         flexDirection: 'row',

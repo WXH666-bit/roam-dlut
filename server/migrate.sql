@@ -16,7 +16,7 @@ CREATE TABLE IF NOT EXISTS messages (
   device_id VARCHAR(64) NOT NULL,
   flower_name VARCHAR(32) NOT NULL,
   text VARCHAR(600) NOT NULL COMMENT '留言正文（140 字 + 贴纸占位符）',
-  media_type ENUM('none','image','video') NOT NULL DEFAULT 'none',
+  media_type ENUM('none','image','video','audio') NOT NULL DEFAULT 'none',
   media_key VARCHAR(512) NULL COMMENT '对象存储 key，读取时实时生成签名 URL',
   lat DOUBLE NOT NULL,
   lng DOUBLE NOT NULL,
@@ -32,6 +32,7 @@ CREATE TABLE IF NOT EXISTS messages (
 -- ALTER TABLE messages ADD COLUMN coordinate_system VARCHAR(16) NULL;
 -- ALTER TABLE messages ADD COLUMN accuracy DOUBLE NULL;
 -- ALTER TABLE messages ADD COLUMN captured_at BIGINT NULL;
+-- ALTER TABLE messages MODIFY COLUMN media_type ENUM('none','image','video','audio') NOT NULL DEFAULT 'none';
 -- 仅 seed-device 下固定的 seed-01…seed-40 会由服务端一次性从 GCJ-02 转为 WGS-84。
 
 -- 阅读记录：按设备去重；剩余可读名额 = READ_LIMIT - 本表计数

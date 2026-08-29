@@ -21,6 +21,7 @@ import Animated, {
 } from 'react-native-reanimated';
 import { Image } from 'expo-image';
 import { VideoView, useVideoPlayer } from 'expo-video';
+import { AudioAttachmentPlayer } from '@/components/AudioAttachmentPlayer';
 import * as Haptics from 'expo-haptics';
 import dayjs from 'dayjs';
 import { useApp } from '@/contexts/AppContext';
@@ -233,6 +234,11 @@ export function LetterOverlay({ messageId, onClose, shareEntry }: Props) {
               {detail.media_type === 'video' && detail.media_url && (
                 <Animated.View entering={FadeIn.delay(textDoneDelay).duration(400)} style={{ marginTop: 18 }}>
                   <LetterVideo uri={detail.media_url} />
+                </Animated.View>
+              )}
+              {detail.media_type === 'audio' && detail.media_url && (
+                <Animated.View entering={FadeIn.delay(textDoneDelay).duration(400)} style={{ marginTop: 18 }}>
+                  <AudioAttachmentPlayer uri={detail.media_url} label="藏在这里的一段声音" paper />
                 </Animated.View>
               )}
 
