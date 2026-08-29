@@ -33,6 +33,12 @@ export const LOCATION_MAX_ACCURACY_METERS = 30;
 /** Tolerate tiny native timestamp/JS clock scheduling differences. */
 export const LOCATION_MAX_FUTURE_SKEW_MS = 5_000;
 
+/** Give a newly started engine time to improve a coarse/cached first fix. */
+export const LOCATION_AUTO_RETRY_GRACE_MS = 15_000;
+
+/** Avoid repeatedly restarting GPS when the environment cannot reach 30 m. */
+export const LOCATION_AUTO_RETRY_COOLDOWN_MS = 45_000;
+
 type LocationQuality = Pick<LocationFix, 'accuracy' | 'timestamp' | 'source' | 'isLive'>;
 
 /**
@@ -57,4 +63,21 @@ export const isFreshLiveLocation = (
 
   const age = now - fix.timestamp;
   return age >= -LOCATION_MAX_FUTURE_SKEW_MS && age <= LOCATION_MAX_AGE_MS;
+};
+
+/**
+ * Foreground recovery policy for stale, missing, or persistently inaccurate
+ * fixes. The caller separately excludes permission-denied/actively-locating
+ * states before restarting the native engines.
+ */
+export const shouldAutoRetryLocation = (
+  fix: LocationQuality | null | undefined,
+  now: number,
+  runStartedAt: number,
+  lastRetryAt: number
+): boolean => {
+  if (![now, runStartedAt, lastRetryAt].every(Number.isFinite)) return false;
+  if (now - runStartedAt < LOCATION_AUTO_RETRY_GRACE_MS) return false;
+  if (now - lastRetryAt < LOCATION_AUTO_RETRY_COOLDOWN_MS) return false;
+  return !isFreshLiveLocation(fix, now);
 };

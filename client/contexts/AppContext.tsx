@@ -23,6 +23,7 @@ import {
   isFreshLiveLocation,
   LOCATION_COORDINATE_SYSTEM,
   LOCATION_MAX_FUTURE_SKEW_MS,
+  shouldAutoRetryLocation,
   type LocationFix,
   type LocationSource,
 } from '@/utils/location';
@@ -131,6 +132,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const fallbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 定位流程令牌：重入（retry）或卸载时递增，作废旧流程的异步回调
   const locationRunRef = useRef(0);
+  const locationRunStartedAtRef = useRef(0);
+  const lastAutomaticLocationRetryAtRef = useRef(0);
 
   // 启动：设备注册 + 已读缓存恢复
   useEffect(() => {
@@ -193,15 +196,14 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  // 定位全流程：expo-location 主引擎；Android 上权限通过后 8 秒无坐标则切备用引擎
-  // （华为/荣耀国行无 GMS，expo-location 的 FusedLocationProvider 不回调，
-  //  react-native-geolocation-service 的 forceLocationManager 走系统 LocationManager 兜底）
+  // 定位全流程：Android 同时竞速 Expo 与系统 LocationManager，先拿到合格实时
+  // 坐标的引擎胜出；这能避开华为/荣耀无 GMS 时原先最多 8 秒的等待。
   const startLocation = useCallback(async () => {
     const run = ++locationRunRef.current;
+    locationRunStartedAtRef.current = Date.now();
     const stale = () => run !== locationRunRef.current;
-    // 主引擎的任一原生 Promise 都可能在无 GMS 设备上不返回；fallback 一旦接管，
-    // 即使这些 Promise 之后才恢复，也不能再重新挂回 expo watch。
     let fallbackStarted = false;
+    let winningLiveSource: 'expo-watch' | 'fallback' | null = null;
     stopLocationEngines();
     setLocationStatus('locating');
     // Keep no stale fix while a retry is in flight.  A later last-known fix
@@ -217,8 +219,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
       source: LocationSource,
       isLive: boolean
     ) => {
-      // fallback 接管后拒绝已排队的 GMS 回调，避免它们把状态抢回去并误清 watchdog。
-      if (stale() || (fallbackStarted && source !== 'fallback')) return;
+      if (stale()) return;
+      // 两套 Android 引擎并行竞速；一方拿到 ≤30 米的新鲜实时坐标后，拒绝败方
+      // 已排队的回调，防止定位来源来回切换。
+      if (
+        (winningLiveSource === 'expo-watch' && source === 'fallback')
+        || (winningLiveSource === 'fallback' && source === 'expo-watch')
+      ) return;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const normalizedAccuracy = (
         typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy >= 0
@@ -240,15 +247,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
         coordinateSystem: LOCATION_COORDINATE_SYSTEM,
       };
       const previousFix = locationFixRef.current;
-      // A cached fallback result can race a real watch callback.  Never let a
-      // non-live fix downgrade an already accepted live fix, and ignore any
-      // out-of-order callback that would move the timestamp backwards.
+      const isFreshAccuracyUpgrade = Boolean(
+        previousFix
+        && nextFix.accuracy !== null
+        && (previousFix.accuracy === null || nextFix.accuracy < previousFix.accuracy)
+        && isFreshLiveLocation(nextFix)
+      );
+      // Never let a cached result replace a live one. Normally timestamps stay
+      // monotonic, but racing providers can differ slightly, so allow an older
+      // callback only when it is both fresh and genuinely more accurate.
       if (
         previousFix
         && (
           (previousFix.isLive && !nextFix.isLive)
           || (previousFix.timestamp !== null
-            && (nextFix.timestamp === null || nextFix.timestamp < previousFix.timestamp))
+            && (nextFix.timestamp === null
+              || (nextFix.timestamp < previousFix.timestamp && !isFreshAccuracyUpgrade)))
           || (previousFix.timestamp !== null
             && nextFix.timestamp !== null
             && previousFix.timestamp === nextFix.timestamp
@@ -260,22 +274,35 @@ export function AppProvider({ children }: { children: ReactNode }) {
       locationFixRef.current = nextFix;
       setLocationFix(nextFix);
       setLocationStatus('ready');
-      // 缓存坐标只用于快速展示，不能证明主 watch 可用；必须等实时回调后才取消切换。
-      if (
-        source === 'expo-watch'
-        && isFreshLiveLocation(nextFix)
-        && fallbackTimerRef.current
-      ) {
-        clearTimeout(fallbackTimerRef.current);
-        fallbackTimerRef.current = null;
-      }
-      if (source === 'fallback' && isLive && fallbackWatchdogRef.current) {
-        clearTimeout(fallbackWatchdogRef.current);
-        fallbackWatchdogRef.current = null;
+      if (isFreshLiveLocation(nextFix)) {
+        if (source === 'expo-watch') {
+          winningLiveSource = 'expo-watch';
+          if (geoWatchIdRef.current !== null) {
+            const watchId = geoWatchIdRef.current;
+            geoWatchIdRef.current = null;
+            try {
+              Geolocation.clearWatch(watchId);
+            } catch {
+              // winner guard still rejects any already queued fallback callback.
+            }
+          }
+        } else if (source === 'fallback') {
+          winningLiveSource = 'fallback';
+          removeExpoWatch(watchRef.current);
+          watchRef.current = null;
+        }
+        if (fallbackTimerRef.current) {
+          clearTimeout(fallbackTimerRef.current);
+          fallbackTimerRef.current = null;
+        }
+        if (fallbackWatchdogRef.current) {
+          clearTimeout(fallbackWatchdogRef.current);
+          fallbackWatchdogRef.current = null;
+        }
       }
     };
 
-    // 备用引擎：停 expo watch，强制走系统 LocationManager（终态交给 onError 判定）
+    // Android 并行引擎：强制走系统 LocationManager，荣耀/华为无需等待 GMS 超时。
     const startFallbackEngine = () => {
       if (stale() || fallbackStarted) return;
       fallbackStarted = true;
@@ -288,8 +315,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
         clearTimeout(fallbackWatchdogRef.current);
         fallbackWatchdogRef.current = null;
       }
-      removeExpoWatch(watchRef.current);
-      watchRef.current = null;
       // JS 看门狗：15 秒无 fix 置 unavailable；订阅保持，真实 fix 到达时 onFix 自动翻回 ready
       fallbackWatchdogRef.current = setTimeout(() => {
         if (stale()) return;
@@ -306,7 +331,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             true
           ),
           (err) => {
-            if (stale()) return;
+            if (stale() || winningLiveSource === 'expo-watch') return;
             // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
             if (err.code === 1) setLocationStatus('denied');
             else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
@@ -364,28 +389,49 @@ export function AppProvider({ children }: { children: ReactNode }) {
         setLocationStatus('denied');
         return;
       }
-      // 必须在任何 GMS 定位调用之前启动。华为/荣耀上 getLastKnownPositionAsync 本身
-      // 就可能永久 pending，若等它返回后再设定时器，备用引擎永远不会启动。
+      // Android 立即启动系统 LocationManager，不再等待 Expo/GMS 8 秒超时。
       if (Platform.OS === 'android') {
-        fallbackTimerRef.current = setTimeout(startFallbackEngine, 8000);
+        startFallbackEngine();
       } else if (Platform.OS === 'ios') {
         // iOS 无 GMS 问题，超时仅提示；主引擎晚到的回调仍可把状态翻回 ready。
         fallbackTimerRef.current = setTimeout(() => {
           if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
         }, 8000);
       }
-      const last = await Location.getLastKnownPositionAsync();
-      if (stale() || fallbackStarted) return;
-      if (last) {
-        onFix(
-          last.coords.latitude,
-          last.coords.longitude,
-          last.coords.accuracy ?? null,
-          last.timestamp ?? null,
-          'last-known',
-          false
-        );
-      }
+
+      // 三条路径同时开始：缓存位置负责秒显；最高精度单次定位抢首拍；watch
+      // 负责后续更新。任何一条原生 Promise 卡住都不会阻塞另外两条。
+      void Location.getLastKnownPositionAsync()
+        .then((last) => {
+          if (stale() || !last) return;
+          onFix(
+            last.coords.latitude,
+            last.coords.longitude,
+            last.coords.accuracy ?? null,
+            last.timestamp ?? null,
+            'last-known',
+            false
+          );
+        })
+        .catch(() => {
+          // 缓存未命中不影响两套实时引擎。
+        });
+
+      void Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.BestForNavigation,
+      })
+        .then((pos) => onFix(
+          pos.coords.latitude,
+          pos.coords.longitude,
+          pos.coords.accuracy ?? null,
+          pos.timestamp ?? null,
+          'expo-watch',
+          true
+        ))
+        .catch(() => {
+          // watch 与 Android LocationManager 仍在竞速。
+        });
+
       const sub = await Location.watchPositionAsync(
         {
           // A 50 m encounter/publish needs a live high-accuracy fix; the
@@ -403,7 +449,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
           true
         )
       );
-      if (stale() || fallbackStarted) {
+      if (stale() || winningLiveSource === 'fallback') {
         removeExpoWatch(sub);
         return;
       }
@@ -425,6 +471,31 @@ export function AppProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     locationStatusRef.current = locationStatus;
   }, [locationStatus]);
+
+  // 前台持续自愈：首次粗定位保留 15 秒改善窗口；之后若坐标过期、缺失或
+  // 精度仍大于 30 米，则重新启动双引擎。45 秒冷却避免弱信号环境反复重启 GPS。
+  useEffect(() => {
+    if (Platform.OS === 'web') return undefined;
+
+    const timer = setInterval(() => {
+      if (AppState.currentState !== 'active') return;
+      const status = locationStatusRef.current;
+      if (status === 'denied' || status === 'locating') return;
+
+      const now = Date.now();
+      if (!shouldAutoRetryLocation(
+        locationFixRef.current,
+        now,
+        locationRunStartedAtRef.current,
+        lastAutomaticLocationRetryAtRef.current
+      )) return;
+
+      lastAutomaticLocationRetryAtRef.current = now;
+      startLocation();
+    }, 5_000);
+
+    return () => clearInterval(timer);
+  }, [startLocation]);
 
   // 权限被拒后去系统设置开了权限，回到 App 时自动重试（仅 denied 态，不打断正常流程）
   useEffect(() => {

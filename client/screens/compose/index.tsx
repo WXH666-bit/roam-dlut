@@ -745,17 +745,32 @@ export default function ComposeScreen() {
                 已定位 · {location.lat.toFixed(6)}, {location.lng.toFixed(6)}
               </Text>
               {locationAccuracy === null ? (
-                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
-                  定位精度未知 · 需要实时高精度定位
-                </Text>
+                <>
+                  <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+                    定位精度未知 · 需要实时高精度定位
+                  </Text>
+                  <TouchableOpacity onPress={retryLocation}>
+                    <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>重新定位</Text>
+                  </TouchableOpacity>
+                </>
               ) : locationAccuracy > LOCATION_MAX_ACCURACY_METERS ? (
-                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
-                  定位精度约±{Math.round(locationAccuracy)}米 · 需≤30米才能发布
-                </Text>
+                <>
+                  <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+                    定位精度约±{Math.round(locationAccuracy)}米 · 需≤30米才能发布
+                  </Text>
+                  <TouchableOpacity onPress={retryLocation}>
+                    <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>重新定位</Text>
+                  </TouchableOpacity>
+                </>
               ) : !isFreshLiveLocation(locationFix) ? (
-                <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
-                  实时定位已过期 · 正在更新
-                </Text>
+                <>
+                  <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
+                    实时定位已过期 · 正在更新
+                  </Text>
+                  <TouchableOpacity onPress={retryLocation}>
+                    <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>重新定位</Text>
+                  </TouchableOpacity>
+                </>
               ) : null}
             </>
           ) : locationStatus === 'ready' && location ? (

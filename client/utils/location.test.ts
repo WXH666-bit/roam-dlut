@@ -4,6 +4,9 @@ import {
   LOCATION_MAX_ACCURACY_METERS,
   LOCATION_MAX_AGE_MS,
   LOCATION_MAX_FUTURE_SKEW_MS,
+  LOCATION_AUTO_RETRY_COOLDOWN_MS,
+  LOCATION_AUTO_RETRY_GRACE_MS,
+  shouldAutoRetryLocation,
   type LocationFix,
 } from './location';
 
@@ -18,6 +21,36 @@ const liveFix = (overrides: Partial<LocationFix> = {}): LocationFix => ({
   isLive: true,
   coordinateSystem: LOCATION_COORDINATE_SYSTEM,
   ...overrides,
+});
+
+describe('shouldAutoRetryLocation', () => {
+  it('retries stale or inaccurate fixes only after the grace period', () => {
+    const startedAt = now - LOCATION_AUTO_RETRY_GRACE_MS;
+    expect(shouldAutoRetryLocation(liveFix({ accuracy: 45 }), now, startedAt, 0)).toBe(true);
+    expect(shouldAutoRetryLocation(
+      liveFix({ timestamp: now - LOCATION_MAX_AGE_MS - 1 }),
+      now,
+      startedAt,
+      0
+    )).toBe(true);
+    expect(shouldAutoRetryLocation(
+      liveFix({ accuracy: 45 }),
+      now,
+      now - LOCATION_AUTO_RETRY_GRACE_MS + 1,
+      0
+    )).toBe(false);
+  });
+
+  it('does not restart a fresh fix or retry again during cooldown', () => {
+    const startedAt = now - LOCATION_AUTO_RETRY_GRACE_MS;
+    expect(shouldAutoRetryLocation(liveFix(), now, startedAt, 0)).toBe(false);
+    expect(shouldAutoRetryLocation(
+      liveFix({ accuracy: 45 }),
+      now,
+      startedAt,
+      now - LOCATION_AUTO_RETRY_COOLDOWN_MS + 1
+    )).toBe(false);
+  });
 });
 
 describe('isFreshLiveLocation', () => {
