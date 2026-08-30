@@ -12,6 +12,9 @@
 AGENTS.md
 client/scripts/
 
+# 本地项目文档（不推送 GitHub）
+docs/
+
 # 后端运行时数据
 server/data/
 
