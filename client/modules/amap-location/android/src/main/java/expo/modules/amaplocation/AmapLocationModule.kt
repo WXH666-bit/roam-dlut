@@ -82,9 +82,10 @@ class AmapLocationModule : Module() {
       setInterval(intervalMs)
       setNeedAddress(false)
       setMockEnable(false)
-      // Indoor network accuracy depends on a fresh AP list. AMap defaults this
-      // to false; active scans trade a little power for materially better fixes.
-      setWifiActiveScan(true)
+      // Keep active Wi-Fi refresh enabled for better indoor network fixes.
+      // setWifiActiveScan was removed from the 11.x SDK surface; setWifiScan
+      // is the supported equivalent and defaults to true.
+      setWifiScan(true)
       // A cached coordinate may look precise while being unsafe for a 50 m action.
       setLocationCacheEnable(false)
       setHttpTimeOut(8_000L)

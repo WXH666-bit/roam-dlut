@@ -76,7 +76,9 @@ internal class BackgroundAmapLocationEngine(
         setInterval(LOCATION_INTERVAL_MS)
         setNeedAddress(false)
         setMockEnable(false)
-        setWifiActiveScan(true)
+        // 11.x exposes active Wi-Fi refresh through setWifiScan; the older
+        // setWifiActiveScan name is no longer present in this artifact.
+        setWifiScan(true)
         setLocationCacheEnable(false)
         setHttpTimeOut(HTTP_TIMEOUT_MS)
       }
