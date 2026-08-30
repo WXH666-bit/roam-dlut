@@ -24,7 +24,10 @@ export function StickerIcon({ id, size = 22 }: Props) {
         />
       )}
       {id === 'moon' && (
-        <Path d="M31 5 A19 19 0 1 0 31 43 A15 15 0 1 1 31 5 Z" fill={CREAM} />
+        <Path
+          d="M31 5 C18 8 13 17 15 27 C17 37 25 43 35 42 C29 39 25 34 24 27 C22 18 25 10 31 5 Z"
+          fill={CREAM}
+        />
       )}
       {id === 'envelope' && (
         <>

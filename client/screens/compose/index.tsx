@@ -432,7 +432,7 @@ export default function ComposeScreen() {
       return;
     }
     if (!initialDemoMode && !isFreshLiveLocation(initialFix)) {
-      Toast.show({ type: 'error', text1: '定位还不够新或不够准（需实时且精度≤30米）' });
+      Toast.show({ type: 'error', text1: '定位精度需≤30米；室内请到窗边或开启精确位置' });
       return;
     }
     setPublishing(true);
@@ -496,7 +496,7 @@ export default function ComposeScreen() {
       const raw = e instanceof Error ? e.message : '';
       const msg =
         raw === 'location_unusable'
-          ? '定位已过期或精度不足，等实时定位（精度≤30米）再藏'
+          ? '定位精度需≤30米；室内请到窗边或开启精确位置'
           : raw === 'file_too_large'
             ? media?.kind === 'video'
               ? '视频超过 120MB，压缩或降低清晰度后再试'
@@ -758,8 +758,14 @@ export default function ComposeScreen() {
                   <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 0.5 }}>
                     定位精度约±{Math.round(locationAccuracy)}米 · 需≤30米才能发布
                   </Text>
+                  <Text style={{ width: '100%', textAlign: 'center', fontSize: 11, color: 'rgba(142,139,163,0.78)' }}>
+                    室内信号弱时请到窗边，或检查是否开启“精确位置”
+                  </Text>
                   <TouchableOpacity onPress={retryLocation}>
                     <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>重新定位</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => Linking.openSettings().catch(() => undefined)}>
+                    <Text style={{ fontSize: 12, color: '#F5C26B', letterSpacing: 1, textDecorationLine: 'underline' }}>定位设置</Text>
                   </TouchableOpacity>
                 </>
               ) : !isFreshLiveLocation(locationFix) ? (
