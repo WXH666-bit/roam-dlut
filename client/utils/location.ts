@@ -65,6 +65,30 @@ const transformGcjLatitude = (x: number, y: number): number => {
   return value;
 };
 
+/**
+ * Whether a provider is actively delivering a current fix, independent of its
+ * reported uncertainty. This lets AMap remain the selected Android provider
+ * while an indoor network fix is still improving toward the 30 m action gate.
+ */
+export const isFreshLiveProviderLocation = (
+  fix: LocationQuality | null | undefined,
+  now = Date.now()
+): boolean => {
+  if (
+    !fix
+    || !fix.isLive
+    || (fix.source !== 'expo-watch' && fix.source !== 'fallback' && fix.source !== 'amap')
+    || fix.timestamp === null
+    || !Number.isFinite(fix.timestamp)
+    || fix.timestamp <= 0
+    || fix.timestamp > Number.MAX_SAFE_INTEGER
+    || !Number.isFinite(now)
+  ) return false;
+
+  const age = now - fix.timestamp;
+  return age >= -LOCATION_MAX_FUTURE_SKEW_MS && age <= LOCATION_MAX_AGE_MS;
+};
+
 const transformGcjLongitude = (x: number, y: number): number => {
   let value = 300 + x + 2 * y + 0.1 * x * x + 0.1 * x * y
     + 0.1 * Math.sqrt(Math.abs(x));
@@ -121,23 +145,10 @@ export const isFreshLiveLocation = (
   fix: LocationQuality | null | undefined,
   now = Date.now()
 ): boolean => {
-  if (
-    !fix
-    || !fix.isLive
-    || (fix.source !== 'expo-watch' && fix.source !== 'fallback' && fix.source !== 'amap')
-  ) return false;
+  if (!fix || !isFreshLiveProviderLocation(fix, now)) return false;
   if (fix.accuracy === null || !Number.isFinite(fix.accuracy) || fix.accuracy < 0) return false;
   if (fix.accuracy > LOCATION_MAX_ACCURACY_METERS) return false;
-  if (
-    fix.timestamp === null
-    || !Number.isFinite(fix.timestamp)
-    || fix.timestamp <= 0
-    || fix.timestamp > Number.MAX_SAFE_INTEGER
-  ) return false;
-  if (!Number.isFinite(now)) return false;
-
-  const age = now - fix.timestamp;
-  return age >= -LOCATION_MAX_FUTURE_SKEW_MS && age <= LOCATION_MAX_AGE_MS;
+  return true;
 };
 
 /**

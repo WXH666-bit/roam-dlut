@@ -82,6 +82,9 @@ class AmapLocationModule : Module() {
       setInterval(intervalMs)
       setNeedAddress(false)
       setMockEnable(false)
+      // Indoor network accuracy depends on a fresh AP list. AMap defaults this
+      // to false; active scans trade a little power for materially better fixes.
+      setWifiActiveScan(true)
       // A cached coordinate may look precise while being unsafe for a 50 m action.
       setLocationCacheEnable(false)
       setHttpTimeOut(8_000L)
@@ -122,7 +125,6 @@ class AmapLocationModule : Module() {
   }
 
   private fun isLiveLocationType(locationType: Int): Boolean = when (locationType) {
-    AMapLocation.LOCATION_TYPE_SAME_REQ,
     AMapLocation.LOCATION_TYPE_FIX_CACHE,
     AMapLocation.LOCATION_TYPE_OFFLINE,
     AMapLocation.LOCATION_TYPE_LAST_LOCATION_CACHE,

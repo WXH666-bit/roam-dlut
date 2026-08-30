@@ -433,6 +433,7 @@ export function NotificationBridge() {
           readIds,
           radius: PROXIMITY_RADIUS_METERS,
           appInForeground: inForeground,
+          amapPrivacyAccepted: onboarded === true,
           initialEventCursor,
         });
         if (cancelled) return;

@@ -107,5 +107,5 @@
     "typescript-eslint": "^8.32.1",
     "uniwind": "^1.2.7"
   },
-  "version": "1.4.0"
+  "version": "1.4.1"
 }

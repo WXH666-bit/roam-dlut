@@ -18,6 +18,8 @@ export interface BackgroundGuardianConfig {
   radius?: number;
   /** Whether the JS app is currently visible. */
   appInForeground?: boolean;
+  /** Set only after the app's onboarding/privacy disclosure has been accepted. */
+  amapPrivacyAccepted?: boolean;
   /** Optional polling interval. The native default is 30 seconds. */
   pollIntervalMs?: number;
   /** JS event cursor captured immediately before native polling takes ownership. */

@@ -14,3 +14,9 @@ android {
     consumerProguardFiles("proguard-rules.pro")
   }
 }
+
+dependencies {
+  // The background guardian follows the same provider order as the foreground:
+  // AMap first, Android framework providers only after a real AMap failure.
+  implementation 'com.amap.api:location:11.2.100'
+}

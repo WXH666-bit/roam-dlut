@@ -18,6 +18,7 @@ internal data class GuardianConfig(
   val readIds: Set<String>,
   val radiusMeters: Double,
   val appInForeground: Boolean,
+  val amapPrivacyAccepted: Boolean,
   val pollIntervalMs: Long,
   val initialEventCursor: Long?,
 ) {
@@ -28,6 +29,7 @@ internal data class GuardianConfig(
     put("readIds", JSONArray(readIds.toList()))
     put("radiusMeters", radiusMeters)
     put("appInForeground", appInForeground)
+    put("amapPrivacyAccepted", amapPrivacyAccepted)
     put("pollIntervalMs", pollIntervalMs)
     put("initialEventCursor", initialEventCursor ?: JSONObject.NULL)
   }
@@ -77,6 +79,7 @@ internal data class GuardianConfig(
         readIds = readIds,
         radiusMeters = radiusMeters,
         appInForeground = arguments.getBoolean("appInForeground", false),
+        amapPrivacyAccepted = arguments.getBoolean("amapPrivacyAccepted", false),
         pollIntervalMs = pollIntervalMs,
         initialEventCursor = initialEventCursor,
       )
@@ -121,6 +124,7 @@ internal data class GuardianConfig(
         readIds = readIds,
         radiusMeters = radius,
         appInForeground = json.optBoolean("appInForeground", false),
+        amapPrivacyAccepted = json.optBoolean("amapPrivacyAccepted", false),
         pollIntervalMs = interval,
         initialEventCursor = initialEventCursor,
       )

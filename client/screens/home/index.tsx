@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Platform, Text, TouchableOpacity, View } from 'react-native';
 import Animated, {
   Easing,
@@ -23,8 +24,9 @@ import { useApp } from '@/contexts/AppContext';
 import { useHandwritingFont } from '@/contexts/FontContext';
 import { useOtaUpdatePrompt } from '@/contexts/OtaUpdateContext';
 import { useSafeRouter } from '@/hooks/useSafeRouter';
-import { haversineMeters } from '@/utils/haversine';
+import { findNearbyUnreadMessages, findUnannouncedEncounterIds } from '@/utils/encounters';
 import { isFreshLiveLocation } from '@/utils/location';
+import { encounterSoundIdsStorageKey } from '@/utils/notificationStorage';
 import { playEncounter, playDissolve } from '@/utils/sound';
 import { DissolveFx } from '@/components/DissolveFx';
 
@@ -89,12 +91,11 @@ export default function HomeScreen() {
     readIds,
     readLimit,
     user,
+    deviceId,
     onboarded,
   } = useApp();
 
   const [moodIndex, setMoodIndex] = useState(0);
-  const [encounterId, setEncounterId] = useState<string | null>(null);
-  const [nearbyExtra, setNearbyExtra] = useState(0);
   const [letterId, setLetterId] = useState<string | null>(null);
   const [panelVisible, setPanelVisible] = useState(false);
   const [demoDissolve, setDemoDissolve] = useState(false);
@@ -102,6 +103,18 @@ export default function HomeScreen() {
   // the 30-second gate periodically so an old fix cannot leave an encounter
   // dot visible indefinitely.
   const [locationNow, setLocationNow] = useState(() => Date.now());
+  const [encounterSoundIdsReadyGeneration, setEncounterSoundIdsReadyGeneration] = useState(0);
+  const announcedEncounterIdsRef = useRef<Set<string>>(new Set());
+  const encounterSoundIdsGenerationRef = useRef(0);
+  const encounterSoundWriteRef = useRef<Promise<void>>(Promise.resolve());
+  const homeMountedRef = useRef(true);
+
+  useEffect(() => {
+    homeMountedRef.current = true;
+    return () => {
+      homeMountedRef.current = false;
+    };
+  }, []);
 
   useEffect(() => {
     const timer = setInterval(() => setLocationNow(Date.now()), 5000);
@@ -121,38 +134,86 @@ export default function HomeScreen() {
     return () => clearInterval(timer);
   }, []);
 
-  // 偶遇感应：与存活留言做 Haversine 距离判定
+  const canTriggerEncounter = demoMode || isFreshLiveLocation(locationFix, locationNow);
+  const nearbyEncounters = useMemo(() => (
+    canTriggerEncounter
+      ? findNearbyUnreadMessages(location, aliveMessages, readIds, ENCOUNTER_RADIUS_M)
+      : []
+  ), [canTriggerEncounter, location, aliveMessages, readIds]);
+  // Distance naturally jitters every two seconds. Keep the visual constellation
+  // ordered by ID so its dots do not trade places while the user is reaching.
+  const displayedNearbyEncounters = useMemo(
+    () => [...nearbyEncounters].sort((left, right) => left.id.localeCompare(right.id)),
+    [nearbyEncounters]
+  );
+
+  // Restore the identity-scoped set before deciding whether an encounter is
+  // new. This survives location jitter, navigation and app restarts.
   useEffect(() => {
-    // Demo coordinates intentionally bypass the GPS quality gate.  Real
-    // encounters require a fresh <=30 m live high-accuracy watch fix.
-    const canTriggerEncounter = demoMode || isFreshLiveLocation(locationFix, locationNow);
-    if (!location || !canTriggerEncounter) {
-      setEncounterId(null);
-      setNearbyExtra(0);
-      return;
-    }
-    let nearest: string | null = null;
-    let nearestDist = Infinity;
-    let inRange = 0;
-    for (const m of aliveMessages) {
-      if (readIds.has(m.id)) continue;
-      const d = haversineMeters(location.lat, location.lng, m.lat, m.lng);
-      if (d <= ENCOUNTER_RADIUS_M) {
-        inRange += 1;
-        if (d < nearestDist) {
-          nearest = m.id;
-          nearestDist = d;
+    let cancelled = false;
+    const generation = encounterSoundIdsGenerationRef.current + 1;
+    encounterSoundIdsGenerationRef.current = generation;
+    announcedEncounterIdsRef.current = new Set();
+    if (!deviceId) return undefined;
+    void AsyncStorage.getItem(encounterSoundIdsStorageKey(deviceId))
+      .then((raw) => {
+        if (cancelled || !raw) return;
+        const value = JSON.parse(raw) as unknown;
+        if (Array.isArray(value)) {
+          announcedEncounterIdsRef.current = new Set(
+            value.filter((item): item is string => typeof item === 'string')
+          );
         }
-      }
-    }
-    if (nearest && nearest !== encounterId && Platform.OS !== 'web') {
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (!cancelled) setEncounterSoundIdsReadyGeneration(generation);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [deviceId]);
+
+  // One message can announce at most once. A batch of newly nearby messages
+  // produces one cue instead of stacking several sounds.
+  useEffect(() => {
+    if (
+      !deviceId
+      || encounterSoundIdsReadyGeneration !== encounterSoundIdsGenerationRef.current
+      || nearbyEncounters.length === 0
+    ) return;
+    const announced = announcedEncounterIdsRef.current;
+    const newIds = findUnannouncedEncounterIds(nearbyEncounters, announced);
+    if (newIds.length === 0) return;
+
+    newIds.forEach((id) => announced.add(id));
+    // Message IDs are unique and the app is currently a small friends-only
+    // project. Keep the full identity-scoped set so an old unread message can
+    // never become "new" merely because a storage cap evicted it.
+    const storedIds = [...announced];
+    announcedEncounterIdsRef.current = new Set(storedIds);
+    // Serialize writes so an older, smaller ID set can never finish after a
+    // newer superset and make a message sound again on the next launch.
+    const hydrationGeneration = encounterSoundIdsReadyGeneration;
+    const durableWrite = encounterSoundWriteRef.current
+      .catch(() => undefined)
+      .then(() => AsyncStorage.setItem(
+        encounterSoundIdsStorageKey(deviceId),
+        JSON.stringify(storedIds)
+      ));
+    encounterSoundWriteRef.current = durableWrite.catch(() => undefined);
+    // Play only after the ID claim is durable. A write failure or identity
+    // switch suppresses the cue instead of allowing the same message to replay.
+    void durableWrite.then(() => {
+      if (
+        !homeMountedRef.current
+        || hydrationGeneration !== encounterSoundIdsGenerationRef.current
+        || Platform.OS === 'web'
+      ) return;
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => undefined);
       playEncounter();
-    }
-    setEncounterId(nearest);
-    setNearbyExtra(nearest ? inRange - 1 : 0);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [location, locationFix, locationNow, demoMode, aliveMessages, readIds]);
+    }).catch(() => undefined);
+  }, [deviceId, encounterSoundIdsReadyGeneration, nearbyEncounters]);
 
   const waitingText = useMemo(() => (aliveTotal > 0 ? '条留言正在等待' : '条留言刚刚都消散了'), [aliveTotal]);
   const {
@@ -261,22 +322,48 @@ export default function HomeScreen() {
 
         {/* 守候区 */}
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 32 }}>
-          {encounterId ? (
-            <Animated.View entering={FadeIn.duration(600)} exiting={FadeOut.duration(400)} style={{ alignItems: 'center' }}>
-              <GlowDot onPress={() => setLetterId(encounterId)} />
-              {nearbyExtra > 0 && (
-                <Text
-                  style={{
-                    marginTop: 18,
-                    fontFamily: handwriting,
-                    fontSize: 14,
-                    color: 'rgba(237,231,246,0.6)',
-                    letterSpacing: 2,
-                  }}
-                >
-                  附近还有 {nearbyExtra} 条
-                </Text>
-              )}
+          {nearbyEncounters.length > 0 ? (
+            <Animated.View
+              entering={FadeIn.duration(600)}
+              exiting={FadeOut.duration(400)}
+              style={{ width: '100%', alignItems: 'center' }}
+            >
+              <View
+                style={{
+                  maxWidth: 260,
+                  flexDirection: 'row',
+                  flexWrap: 'wrap',
+                  justifyContent: 'center',
+                  alignItems: 'center',
+                  columnGap: 14,
+                  rowGap: 10,
+                }}
+              >
+                {displayedNearbyEncounters.map((encounter, index) => (
+                  <View
+                    key={encounter.id}
+                    style={{ transform: [{ translateY: [0, 8, -5][index % 3] }] }}
+                  >
+                    <GlowDot
+                      compact={displayedNearbyEncounters.length > 1}
+                      animationIndex={index}
+                      accessibilityLabel={`打开附近第 ${index + 1} 条留言`}
+                      onPress={() => setLetterId(encounter.id)}
+                    />
+                  </View>
+                ))}
+              </View>
+              <Text
+                style={{
+                  marginTop: nearbyEncounters.length > 1 ? 20 : 8,
+                  fontFamily: handwriting,
+                  fontSize: 14,
+                  color: '#F5C26B',
+                  letterSpacing: 2,
+                }}
+              >
+                附近有 {nearbyEncounters.length} 条留言
+              </Text>
             </Animated.View>
           ) : (
             <Animated.View entering={FadeIn.duration(800)} style={{ alignItems: 'center' }}>

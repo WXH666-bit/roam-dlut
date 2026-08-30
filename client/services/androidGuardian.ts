@@ -17,6 +17,7 @@ export const syncAndroidGuardian = async (args: {
   token: string | null;
   readIds: Set<string>;
   appInForeground: boolean;
+  amapPrivacyAccepted: boolean;
   initialEventCursor?: number;
   radius?: number;
 }): Promise<boolean> => {
@@ -28,6 +29,9 @@ export const syncAndroidGuardian = async (args: {
     readIds: [...args.readIds],
     radiusMeters: args.radius ?? 50,
     appInForeground: args.appInForeground,
+    // Persist the onboarding disclosure decision so a sticky service never
+    // invents AMap consent after the JS process exits.
+    amapPrivacyAccepted: args.amapPrivacyAccepted,
     pollIntervalMs: 30_000,
     initialEventCursor: args.initialEventCursor,
   };

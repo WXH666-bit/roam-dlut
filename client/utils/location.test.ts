@@ -1,6 +1,7 @@
 import {
   gcj02ToWgs84,
   isFreshLiveLocation,
+  isFreshLiveProviderLocation,
   LOCATION_COORDINATE_SYSTEM,
   LOCATION_MAX_ACCURACY_METERS,
   LOCATION_MAX_AGE_MS,
@@ -85,6 +86,21 @@ describe('isFreshLiveLocation', () => {
     expect(isFreshLiveLocation(liveFix({ timestamp: now - 0.25 }), now)).toBe(true);
     expect(isFreshLiveLocation(liveFix({ timestamp: now + LOCATION_MAX_FUTURE_SKEW_MS }), now)).toBe(true);
     expect(isFreshLiveLocation(liveFix({ timestamp: now + LOCATION_MAX_FUTURE_SKEW_MS + 1 }), now)).toBe(false);
+  });
+});
+
+describe('isFreshLiveProviderLocation', () => {
+  it('keeps a fresh AMap provider selected while indoor accuracy is still coarse', () => {
+    expect(isFreshLiveProviderLocation(liveFix({ source: 'amap', accuracy: 58 }), now)).toBe(true);
+    expect(isFreshLiveLocation(liveFix({ source: 'amap', accuracy: 58 }), now)).toBe(false);
+  });
+
+  it('rejects cached and stale provider results', () => {
+    expect(isFreshLiveProviderLocation(liveFix({ source: 'last-known', isLive: false }), now)).toBe(false);
+    expect(isFreshLiveProviderLocation(
+      liveFix({ source: 'amap', timestamp: now - LOCATION_MAX_AGE_MS - 1 }),
+      now
+    )).toBe(false);
   });
 });
 

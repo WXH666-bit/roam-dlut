@@ -29,6 +29,7 @@ import {
 import {
   gcj02ToWgs84,
   isFreshLiveLocation,
+  isFreshLiveProviderLocation,
   LOCATION_COORDINATE_SYSTEM,
   LOCATION_MAX_FUTURE_SKEW_MS,
   shouldAutoRetryLocation,
@@ -149,6 +150,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const locationRunStartedAtRef = useRef(0);
   const lastAutomaticLocationRetryAtRef = useRef(0);
   const automaticLocationRetryCountRef = useRef(0);
+  const locationPausedForBackgroundRef = useRef(false);
 
   // 启动：设备注册 + 已读缓存恢复
   useEffect(() => {
@@ -228,7 +230,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     }
   }, [stopAmapEngine]);
 
-  // 定位全流程：Android 严格优先高德；高德缺失、失败或 8 秒内没有合格结果时，
+  // 定位全流程：Android 严格优先高德；高德缺失、失败或 8 秒内没有实时结果时，
   // 再降级为 Expo 与系统 LocationManager 竞速。iOS 仍使用 Expo/Core Location。
   const startLocation = useCallback(async () => {
     const run = ++locationRunRef.current;
@@ -256,8 +258,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isLive: boolean
     ) => {
       if (stale()) return;
-      // 一方拿到 ≤30 米的新鲜实时坐标后，拒绝其他来源已排队的回调，
-      // 防止定位来源来回切换。
+      // Once the AMap watchdog has committed to legacy engines, an already
+      // queued callback from the destroyed client must not tear them down.
+      if (legacyStarted && source === 'amap') return;
+      // AMap 一旦返回新鲜实时坐标就保持主引擎；备用来源只有拿到
+      // ≤30 米结果才会胜出，防止定位来源来回切换。
       if (winningLiveSource && source !== 'last-known' && source !== winningLiveSource) return;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const normalizedAccuracy = (
@@ -307,8 +312,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
       locationFixRef.current = nextFix;
       setLocationFix(nextFix);
       setLocationStatus('ready');
-      if (isFreshLiveLocation(nextFix)) {
-        automaticLocationRetryCountRef.current = 0;
+      const isActionableFix = isFreshLiveLocation(nextFix);
+      const shouldSelectSource = isActionableFix || (
+        source === 'amap' && isFreshLiveProviderLocation(nextFix)
+      );
+      if (shouldSelectSource) {
+        if (isActionableFix) automaticLocationRetryCountRef.current = 0;
         if (source === 'expo-watch') {
           winningLiveSource = 'expo-watch';
           stopAmapEngine();
@@ -515,6 +524,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
       fallbackTimerRef.current = setTimeout(() => {
         fallbackTimerRef.current = null;
+        // Accuracy above 30 m is not an AMap failure. Any fresh live AMap fix
+        // selects it before this timer fires; fallback means no live response.
         if (!stale() && winningLiveSource !== 'amap') startLegacyEngines();
       }, AMAP_PRIORITY_TIMEOUT_MS);
     };
@@ -554,7 +565,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
           amapStarted = false;
           startLegacyEngines();
         });
-        const started = await startAmapLocation({ privacyAccepted: true, intervalMs: 2000 });
+        const started = await startAmapLocation({
+          privacyAccepted: onboarded === true,
+          intervalMs: 2000,
+        });
         if (
           stale()
           || !started
@@ -607,7 +621,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       if (Platform.OS === 'android') startLegacyEngines();
       else setLocationStatus('unavailable');
     }
-  }, [stopAmapEngine, stopLocationEngines]);
+  }, [onboarded, stopAmapEngine, stopLocationEngines]);
 
   const retryLocation = useCallback(() => {
     automaticLocationRetryCountRef.current = 0;
@@ -648,9 +662,24 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => clearInterval(timer);
   }, [startLocation]);
 
-  // 权限被拒后去系统设置开了权限，回到 App 时自动重试（仅 denied 态，不打断正常流程）
+  // Android 后台由 native guardian 自己的 AMap client 接管，先停掉这里的
+  // client，避免两个高德实例同时耗电；回到前台后再恢复。权限被拒后去系统
+  // 设置打开权限，也沿用同一个 active 事件重试。
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
+      if (Platform.OS === 'android' && s === 'background') {
+        locationPausedForBackgroundRef.current = true;
+        locationRunRef.current += 1;
+        stopLocationEngines();
+        return;
+      }
+      if (s === 'active' && locationPausedForBackgroundRef.current) {
+        locationPausedForBackgroundRef.current = false;
+        automaticLocationRetryCountRef.current = 0;
+        lastAutomaticLocationRetryAtRef.current = 0;
+        if (onboarded === true) startLocation();
+        return;
+      }
       if (s === 'active' && locationStatusRef.current === 'denied') {
         automaticLocationRetryCountRef.current = 0;
         lastAutomaticLocationRetryAtRef.current = 0;
@@ -658,7 +687,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     });
     return () => sub.remove();
-  }, [startLocation]);
+  }, [onboarded, startLocation, stopLocationEngines]);
 
   // 首次引导完成后再请求定位；其余启动权限等待这一步结束后串行处理。
   useEffect(() => {

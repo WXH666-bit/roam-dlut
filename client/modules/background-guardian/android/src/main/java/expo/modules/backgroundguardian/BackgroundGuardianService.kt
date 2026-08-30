@@ -41,14 +41,13 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 
 /**
- * A small Android-framework-only guardian service.
+ * A small Android guardian service with the same provider order as the app.
  *
- * It intentionally uses LocationManager rather than Expo Location's fused
- * provider. This keeps the Honor/MagicOS path independent of Google Play
- * Services while still allowing standard Android devices to use GPS/network
- * providers. Coordinates are consumed as raw WGS-84 latitude/longitude; no
- * GCJ-02 or other map-provider conversion is applied. The service is sticky,
- * and all state needed to resume polling is stored in SharedPreferences.
+ * AMap is primary and is normalized from GCJ-02 to WGS-84 before proximity
+ * checks. Android framework GPS/network providers are a true fallback used
+ * only if AMap cannot start, reports an error or stops producing fresh live
+ * results. The service is sticky, and all state needed to resume polling is
+ * stored in SharedPreferences.
  */
 class BackgroundGuardianService : Service() {
   companion object {
@@ -63,6 +62,8 @@ class BackgroundGuardianService : Service() {
     private const val LOCATION_INTERVAL_MS = 15_000L
     private const val LOCATION_MIN_DISTANCE_METERS = 5f
     private const val LOCATION_CHECK_THROTTLE_MS = 15_000L
+    private const val LOCATION_OWNERSHIP_RECONCILE_MS = 2_000L
+    private const val FRAMEWORK_FALLBACK_RETRY_MS = 5_000L
     private const val MAX_LOCATION_ACCURACY_METERS = 30f
     private const val MAX_LOCATION_AGE_MS = 60_000L
     private const val MAX_LOCATION_FUTURE_MS = 5_000L
@@ -164,22 +165,19 @@ class BackgroundGuardianService : Service() {
   private lateinit var worker: Handler
   private lateinit var locationManager: LocationManager
   private lateinit var notificationManager: NotificationManager
+  private var amapLocationEngine: BackgroundAmapLocationEngine? = null
 
   private var config: GuardianConfig? = null
   private var lastLocation: Location? = null
   private var nextLocationCheckAt = 0L
   private var permissionUnavailable = false
+  private var frameworkFallbackStarted = false
+  private var locationOwnerUiForeground: Boolean? = null
+  private var locationOwnershipGeneration = 0L
 
   private val locationListener = object : LocationListener {
     override fun onLocationChanged(location: Location) {
-      // Keep only a fresh, useful fix in memory. Coarse provider callbacks are
-      // rejected by the 30 m gate before they can displace the current fix.
-      if (!rememberBestLocation(location)) return
-      val now = SystemClock.elapsedRealtime()
-      if (now < nextLocationCheckAt) return
-      nextLocationCheckAt = now + LOCATION_CHECK_THROTTLE_MS
-      val currentConfig = config ?: return
-      lastLocation?.let { fetchNearbyMessages(currentConfig, it) }
+      handleLocationUpdate(location)
     }
 
     override fun onProviderEnabled(provider: String) {
@@ -207,6 +205,19 @@ class BackgroundGuardianService : Service() {
     }
   }
 
+  // JS normally sends an ACTION_UPDATE on every visibility transition. This
+  // native loop closes the handoff gap if Android suspends or kills JS between
+  // AppContext stopping its client and NotificationBridge updating the service.
+  private val locationOwnershipRunnable = object : Runnable {
+    override fun run() {
+      if (!hasGuardianPrerequisites()) return
+      reconcileLocationOwnership()
+      if (::worker.isInitialized) {
+        worker.postDelayed(this, LOCATION_OWNERSHIP_RECONCILE_MS)
+      }
+    }
+  }
+
   override fun onCreate() {
     super.onCreate()
     if (!hasGuardianPrerequisites()) {
@@ -230,6 +241,13 @@ class BackgroundGuardianService : Service() {
     workerThread.start()
     worker = Handler(workerThread.looper)
     locationManager = getSystemService(Context.LOCATION_SERVICE) as LocationManager
+    amapLocationEngine = BackgroundAmapLocationEngine(
+      applicationContext,
+      worker,
+      ::handleAmapLocation,
+      ::handleAmapUnusableResult,
+      ::startFrameworkFallback,
+    )
     worker.post { restartMonitoring() }
   }
 
@@ -259,9 +277,9 @@ class BackgroundGuardianService : Service() {
 
   override fun onDestroy() {
     if (::worker.isInitialized) {
+      stopLocationEngines()
       worker.removeCallbacksAndMessages(null)
-    }
-    if (::locationManager.isInitialized) {
+    } else if (::locationManager.isInitialized) {
       removeLocationUpdates()
     }
     if (::workerThread.isInitialized) {
@@ -280,15 +298,80 @@ class BackgroundGuardianService : Service() {
       stopSelf()
       return
     }
-    removeLocationUpdates()
     worker.removeCallbacks(pollRunnable)
+    worker.removeCallbacks(locationOwnershipRunnable)
     config = BackgroundGuardianStore.readConfig(this)
+    locationOwnerUiForeground = null
     lastLocation = null
     nextLocationCheckAt = 0L
 
-    if (config == null) return
-    requestLocationUpdates()
+    if (config == null) {
+      locationOwnershipGeneration += 1
+      stopLocationEngines()
+      return
+    }
+    reconcileLocationOwnership(force = true)
+    worker.post(locationOwnershipRunnable)
     worker.post(pollRunnable)
+  }
+
+  private fun reconcileLocationOwnership(force: Boolean = false) {
+    val uiForeground = isAppUiForeground()
+    if (!force && locationOwnerUiForeground == uiForeground) return
+    locationOwnerUiForeground = uiForeground
+    locationOwnershipGeneration += 1
+    val ownershipToken = locationOwnershipGeneration
+    stopLocationEngines()
+    lastLocation = null
+    nextLocationCheckAt = 0L
+
+    // While an Activity is visible, AppContext owns its AMap client. Once the
+    // UI is gone, this sticky service starts its own AMap client and only the
+    // engine's explicit unavailable callback may start framework providers.
+    if (!uiForeground) {
+      val currentConfig = config
+      if (currentConfig?.amapPrivacyAccepted == true) {
+        amapLocationEngine?.start(ownershipToken)
+      } else {
+        startFrameworkFallback(ownershipToken)
+      }
+    }
+  }
+
+  private fun stopLocationEngines() {
+    amapLocationEngine?.stop()
+    removeLocationUpdates()
+  }
+
+  private fun handleAmapLocation(ownershipToken: Long, location: Location) {
+    if (ownershipToken != locationOwnershipGeneration) return
+    handleLocationUpdate(location)
+  }
+
+  private fun handleAmapUnusableResult(ownershipToken: Long) {
+    if (ownershipToken != locationOwnershipGeneration) return
+    lastLocation = null
+    nextLocationCheckAt = 0L
+  }
+
+  private fun startFrameworkFallback(ownershipToken: Long) {
+    if (
+      ownershipToken != locationOwnershipGeneration ||
+      frameworkFallbackStarted ||
+      isAppUiForeground() ||
+      config == null ||
+      !hasGuardianPrerequisites()
+    ) return
+    lastLocation = null
+    nextLocationCheckAt = 0L
+    frameworkFallbackStarted = true
+    if (!requestLocationUpdates()) {
+      frameworkFallbackStarted = false
+      worker.postDelayed(
+        { startFrameworkFallback(ownershipToken) },
+        FRAMEWORK_FALLBACK_RETRY_MS,
+      )
+    }
   }
 
   private fun hasLocationPermission(): Boolean {
@@ -300,9 +383,10 @@ class BackgroundGuardianService : Service() {
       Companion.hasBackgroundLocationPermission(this) &&
       Companion.hasLocationServicesEnabled(this)
 
-  private fun requestLocationUpdates() {
-    if (!hasLocationPermission()) return
+  private fun requestLocationUpdates(): Boolean {
+    if (!hasLocationPermission()) return false
 
+    var registered = false
     val providers = listOf(
       LocationManager.GPS_PROVIDER,
       LocationManager.NETWORK_PROVIDER,
@@ -318,10 +402,7 @@ class BackgroundGuardianService : Service() {
           locationListener,
           worker.looper,
         )
-        // A recent system-provider fix lets the first server check happen
-        // immediately instead of waiting for the next GPS callback.
-        val lastKnown = locationManager.getLastKnownLocation(provider)
-        if (lastKnown != null) rememberBestLocation(lastKnown)
+        registered = true
       } catch (_: SecurityException) {
         // Permission can be revoked while the service is alive. The next
         // foreground start/config update will try again.
@@ -329,11 +410,20 @@ class BackgroundGuardianService : Service() {
         // A provider may disappear on an OEM build; keep the other provider.
       }
     }
+    return registered
+  }
 
-    lastLocation?.let { location ->
-      nextLocationCheckAt = SystemClock.elapsedRealtime() + LOCATION_CHECK_THROTTLE_MS
-      config?.let { currentConfig -> fetchNearbyMessages(currentConfig, location) }
-    }
+  private fun handleLocationUpdate(location: Location) {
+    if (isAppUiForeground()) return
+    if (location.provider != "amap" && !frameworkFallbackStarted) return
+    // Keep only a fresh, useful fix in memory. Coarse provider callbacks are
+    // rejected by the 30 m gate before they can displace the current fix.
+    if (!rememberBestLocation(location)) return
+    val now = SystemClock.elapsedRealtime()
+    if (now < nextLocationCheckAt) return
+    nextLocationCheckAt = now + LOCATION_CHECK_THROTTLE_MS
+    val currentConfig = config ?: return
+    lastLocation?.let { fetchNearbyMessages(currentConfig, it) }
   }
 
   private fun isRecentEnough(location: Location, now: Long = System.currentTimeMillis()): Boolean =
@@ -347,7 +437,12 @@ class BackgroundGuardianService : Service() {
   }
 
   private fun isUsableLocation(location: Location): Boolean {
-    if (!location.latitude.isFinite() || !location.longitude.isFinite()) return false
+    if (
+      !location.latitude.isFinite() ||
+      !location.longitude.isFinite() ||
+      location.latitude !in -90.0..90.0 ||
+      location.longitude !in -180.0..180.0
+    ) return false
     if (!isRecentEnough(location)) return false
     // An absent uncertainty is not safe for a 50 m decision.  Framework
     // provider fixes normally carry it; rejecting unknown accuracy prevents a
@@ -381,6 +476,7 @@ class BackgroundGuardianService : Service() {
   }
 
   private fun removeLocationUpdates() {
+    frameworkFallbackStarted = false
     if (!::locationManager.isInitialized) return
     try {
       locationManager.removeUpdates(locationListener)
@@ -491,7 +587,8 @@ class BackgroundGuardianService : Service() {
   private fun isAppUiForeground(): Boolean {
     val state = ActivityManager.RunningAppProcessInfo()
     ActivityManager.getMyMemoryState(state)
-    return state.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND
+    return state.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND ||
+      state.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_VISIBLE
   }
 
   /**
@@ -635,6 +732,10 @@ class BackgroundGuardianService : Service() {
     } catch (_: SecurityException) {
       // Location may be switched off between the JS preflight and service
       // creation. Stop cleanly instead of entering a sticky crash loop.
+      false
+    } catch (_: IllegalStateException) {
+      // A sticky/background recreation can be rejected by newer Android FGS
+      // policy. Let the service stop instead of entering a crash loop.
       false
     }
   }

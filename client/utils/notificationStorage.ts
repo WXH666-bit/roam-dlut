@@ -7,6 +7,7 @@ export const READ_IDS_STORAGE_KEY = 'cidi:read_ids';
 export const NOTIFICATION_CURSOR_STORAGE_KEY = 'cidi:notification_cursor';
 export const NOTIFICATION_PUSH_EVENT_IDS_STORAGE_KEY = 'cidi:notification_push_event_ids';
 export const PROXIMITY_NOTIFICATION_IDS_STORAGE_KEY = 'cidi:proximity_notification_ids';
+export const ENCOUNTER_SOUND_IDS_STORAGE_KEY = 'cidi:encounter_sound_ids';
 export const APP_IN_FOREGROUND_STORAGE_KEY = 'cidi:app_in_foreground';
 export const IOS_BACKGROUND_CONFIG_STORAGE_KEY = 'cidi:ios_background_config';
 
@@ -20,6 +21,10 @@ export const notificationCursorStorageKey = (deviceId: string): string => (
 
 export const proximityNotificationIdsStorageKey = (deviceId: string): string => (
   `${PROXIMITY_NOTIFICATION_IDS_STORAGE_KEY}:${deviceId}`
+);
+
+export const encounterSoundIdsStorageKey = (deviceId: string): string => (
+  `${ENCOUNTER_SOUND_IDS_STORAGE_KEY}:${deviceId}`
 );
 
 export const notificationPushEventIdsStorageKey = (deviceId: string): string => (

@@ -291,6 +291,19 @@ function NameStep({
               {busy ? '落笔中……' : '就叫这个，进去看看'}
             </Text>
           </TouchableOpacity>
+          <Text
+            style={{
+              marginTop: 14,
+              maxWidth: 320,
+              fontSize: 10.5,
+              lineHeight: 17,
+              textAlign: 'center',
+              color: 'rgba(142,139,163,0.72)',
+            }}
+          >
+            继续即表示你同意：授予系统位置权限后，Here 使用高德定位 SDK
+            处理位置、设备及网络信息，用于前后台定位与附近提醒；可随时在系统设置中关闭。
+          </Text>
         </Animated.View>
       </View>
     </Screen>

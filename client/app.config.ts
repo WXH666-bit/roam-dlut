@@ -31,7 +31,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     runtimeVersion: { policy: 'appVersion' },
     "name": "Here",
     "slug": "roam-dlut",
-    "version": "1.4.0",
+    "version": "1.4.1",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
     "scheme": "cidi",
@@ -40,7 +40,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.roamdlut.cidi",
-      "buildNumber": "6",
+      "buildNumber": "7",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "「Here」需要访问您的位置，才能感知附近的留言。",
         "NSLocationAlwaysAndWhenInUseUsageDescription": "允许「Here」始终访问位置，以便在应用不在前台时提醒您附近的留言。",
@@ -61,7 +61,7 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "backgroundColor": "#EEDBB3"
       },
       "package": "com.roamdlut.cidi",
-      "versionCode": 6,
+      "versionCode": 7,
       // 明文流量（usesCleartextTraffic）说明：后端当前为 http://<公网IP>:9091 直连，
       // SDK 54 已移除该 app config 字段的 prebuild 支持，改由 plugins/withCleartextTraffic.js 写入清单；
       // 决赛前若后端切 https，删除该插件即可。
