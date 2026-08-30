@@ -1,4 +1,5 @@
 import {
+  gcj02ToWgs84,
   isFreshLiveLocation,
   LOCATION_COORDINATE_SYSTEM,
   LOCATION_MAX_ACCURACY_METERS,
@@ -6,7 +7,9 @@ import {
   LOCATION_MAX_FUTURE_SKEW_MS,
   LOCATION_AUTO_RETRY_COOLDOWN_MS,
   LOCATION_AUTO_RETRY_GRACE_MS,
+  LOCATION_AUTO_RETRY_LIMIT,
   shouldAutoRetryLocation,
+  wgs84ToGcj02,
   type LocationFix,
 } from './location';
 
@@ -50,12 +53,20 @@ describe('shouldAutoRetryLocation', () => {
       startedAt,
       now - LOCATION_AUTO_RETRY_COOLDOWN_MS + 1
     )).toBe(false);
+    expect(shouldAutoRetryLocation(
+      liveFix({ accuracy: 45 }),
+      now,
+      startedAt,
+      0,
+      LOCATION_AUTO_RETRY_LIMIT
+    )).toBe(false);
   });
 });
 
 describe('isFreshLiveLocation', () => {
   it('accepts a fresh live fix at the accuracy boundary', () => {
     expect(isFreshLiveLocation(liveFix({ accuracy: LOCATION_MAX_ACCURACY_METERS }), now)).toBe(true);
+    expect(isFreshLiveLocation(liveFix({ source: 'amap' }), now)).toBe(true);
   });
 
   it('rejects cached, inaccurate, stale, and unknown fixes', () => {
@@ -74,5 +85,16 @@ describe('isFreshLiveLocation', () => {
     expect(isFreshLiveLocation(liveFix({ timestamp: now - 0.25 }), now)).toBe(true);
     expect(isFreshLiveLocation(liveFix({ timestamp: now + LOCATION_MAX_FUTURE_SKEW_MS }), now)).toBe(true);
     expect(isFreshLiveLocation(liveFix({ timestamp: now + LOCATION_MAX_FUTURE_SKEW_MS + 1 }), now)).toBe(false);
+  });
+});
+
+describe('AMap coordinate normalization', () => {
+  it('converts the campus GCJ-02 point to WGS-84 and round-trips precisely', () => {
+    const converted = gcj02ToWgs84(38.8828, 121.5265);
+    expect(Math.abs(converted.lat - 38.88192768)).toBeLessThan(1e-7);
+    expect(Math.abs(converted.lng - 121.52139591)).toBeLessThan(1e-7);
+    const roundTrip = wgs84ToGcj02(converted.lat, converted.lng);
+    expect(Math.abs(roundTrip.lat - 38.8828)).toBeLessThan(1e-7);
+    expect(Math.abs(roundTrip.lng - 121.5265)).toBeLessThan(1e-7);
   });
 });

@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import Geolocation from 'react-native-geolocation-service';
-import { AppState, Platform } from 'react-native';
+import { Alert, AppState, Linking, Platform } from 'react-native';
 import React, {
   createContext,
   useCallback,
@@ -20,6 +20,14 @@ import {
 } from '@/utils/api';
 import { getDeviceId, overwriteDeviceId } from '@/utils/device';
 import {
+  addAmapLocationErrorListener,
+  addAmapLocationListener,
+  isAmapLocationConfigured,
+  startAmapLocation,
+  stopAmapLocation,
+} from '@/modules/amap-location';
+import {
+  gcj02ToWgs84,
   isFreshLiveLocation,
   LOCATION_COORDINATE_SYSTEM,
   LOCATION_MAX_FUTURE_SKEW_MS,
@@ -100,6 +108,9 @@ const AppContext = createContext<AppContextValue | null>(null);
 const READ_IDS_KEY = READ_IDS_STORAGE_KEY;
 const DEVICE_TOKEN_KEY = 'cidi:device_token';
 const ONBOARDED_KEY = 'cidi:onboarded';
+const AMAP_PRIVACY_CONSENT_KEY = 'here:amap_privacy_consent:v1';
+const AMAP_PRIVACY_POLICY_URL = 'https://lbs.amap.com/pages/privacy/';
+const AMAP_PRIORITY_TIMEOUT_MS = 8_000;
 const POLL_INTERVAL = 30_000;
 
 // web 端 expo-location 的 subscription.remove() 会碰不存在的原生 EventEmitter，静默降级
@@ -128,12 +139,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [readLimit, setReadLimit] = useState(99);
   const watchRef = useRef<Location.LocationSubscription | null>(null);
   const geoWatchIdRef = useRef<number | null>(null);
+  const amapLocationSubscriptionRef = useRef<{ remove(): void } | null>(null);
+  const amapErrorSubscriptionRef = useRef<{ remove(): void } | null>(null);
+  const amapConsentPromptedRef = useRef(false);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 定位流程令牌：重入（retry）或卸载时递增，作废旧流程的异步回调
   const locationRunRef = useRef(0);
   const locationRunStartedAtRef = useRef(0);
   const lastAutomaticLocationRetryAtRef = useRef(0);
+  const automaticLocationRetryCountRef = useRef(0);
 
   // 启动：设备注册 + 已读缓存恢复
   useEffect(() => {
@@ -173,8 +188,25 @@ export function AppProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  // 停掉两套定位引擎与备用切换定时器（重入/卸载前必调）
+  const stopAmapEngine = useCallback(() => {
+    try {
+      amapLocationSubscriptionRef.current?.remove();
+    } catch {
+      // Continue cleanup even if an event subscription is already invalid.
+    }
+    amapLocationSubscriptionRef.current = null;
+    try {
+      amapErrorSubscriptionRef.current?.remove();
+    } catch {
+      // Native teardown below must still run.
+    }
+    amapErrorSubscriptionRef.current = null;
+    void stopAmapLocation().catch(() => undefined);
+  }, []);
+
+  // 停掉全部定位引擎与备用切换定时器（重入/卸载前必调）
   const stopLocationEngines = useCallback(() => {
+    stopAmapEngine();
     removeExpoWatch(watchRef.current);
     watchRef.current = null;
     if (geoWatchIdRef.current !== null) {
@@ -194,16 +226,20 @@ export function AppProvider({ children }: { children: ReactNode }) {
       clearTimeout(fallbackWatchdogRef.current);
       fallbackWatchdogRef.current = null;
     }
-  }, []);
+  }, [stopAmapEngine]);
 
-  // 定位全流程：Android 同时竞速 Expo 与系统 LocationManager，先拿到合格实时
-  // 坐标的引擎胜出；这能避开华为/荣耀无 GMS 时原先最多 8 秒的等待。
+  // 定位全流程：Android 严格优先高德；高德缺失、失败或 8 秒内没有合格结果时，
+  // 再降级为 Expo 与系统 LocationManager 竞速。iOS 仍使用 Expo/Core Location。
   const startLocation = useCallback(async () => {
     const run = ++locationRunRef.current;
     locationRunStartedAtRef.current = Date.now();
     const stale = () => run !== locationRunRef.current;
     let fallbackStarted = false;
-    let winningLiveSource: 'expo-watch' | 'fallback' | null = null;
+    let expoStarted = false;
+    let legacyStarted = false;
+    let amapStarted = false;
+    let amapErrorLogged = false;
+    let winningLiveSource: 'amap' | 'expo-watch' | 'fallback' | null = null;
     stopLocationEngines();
     setLocationStatus('locating');
     // Keep no stale fix while a retry is in flight.  A later last-known fix
@@ -220,12 +256,9 @@ export function AppProvider({ children }: { children: ReactNode }) {
       isLive: boolean
     ) => {
       if (stale()) return;
-      // 两套 Android 引擎并行竞速；一方拿到 ≤30 米的新鲜实时坐标后，拒绝败方
-      // 已排队的回调，防止定位来源来回切换。
-      if (
-        (winningLiveSource === 'expo-watch' && source === 'fallback')
-        || (winningLiveSource === 'fallback' && source === 'expo-watch')
-      ) return;
+      // 一方拿到 ≤30 米的新鲜实时坐标后，拒绝其他来源已排队的回调，
+      // 防止定位来源来回切换。
+      if (winningLiveSource && source !== 'last-known' && source !== winningLiveSource) return;
       if (!Number.isFinite(lat) || !Number.isFinite(lng)) return;
       const normalizedAccuracy = (
         typeof accuracy === 'number' && Number.isFinite(accuracy) && accuracy >= 0
@@ -275,8 +308,10 @@ export function AppProvider({ children }: { children: ReactNode }) {
       setLocationFix(nextFix);
       setLocationStatus('ready');
       if (isFreshLiveLocation(nextFix)) {
+        automaticLocationRetryCountRef.current = 0;
         if (source === 'expo-watch') {
           winningLiveSource = 'expo-watch';
+          stopAmapEngine();
           if (geoWatchIdRef.current !== null) {
             const watchId = geoWatchIdRef.current;
             geoWatchIdRef.current = null;
@@ -288,8 +323,22 @@ export function AppProvider({ children }: { children: ReactNode }) {
           }
         } else if (source === 'fallback') {
           winningLiveSource = 'fallback';
+          stopAmapEngine();
           removeExpoWatch(watchRef.current);
           watchRef.current = null;
+        } else if (source === 'amap') {
+          winningLiveSource = 'amap';
+          removeExpoWatch(watchRef.current);
+          watchRef.current = null;
+          if (geoWatchIdRef.current !== null) {
+            const watchId = geoWatchIdRef.current;
+            geoWatchIdRef.current = null;
+            try {
+              Geolocation.clearWatch(watchId);
+            } catch {
+              // winner guard still rejects any already queued fallback callback.
+            }
+          }
         }
         if (fallbackTimerRef.current) {
           clearTimeout(fallbackTimerRef.current);
@@ -331,7 +380,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             true
           ),
           (err) => {
-            if (stale() || winningLiveSource === 'expo-watch') return;
+            if (stale() || (winningLiveSource && winningLiveSource !== 'fallback')) return;
             // 拿到过坐标后的间歇性丢星不翻状态，避免界面闪烁
             if (err.code === 1) setLocationStatus('denied');
             else setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
@@ -382,25 +431,15 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }
     };
 
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (stale()) return;
-      if (status !== 'granted') {
-        setLocationStatus('denied');
-        return;
-      }
-      // Android 立即启动系统 LocationManager，不再等待 Expo/GMS 8 秒超时。
-      if (Platform.OS === 'android') {
-        startFallbackEngine();
-      } else if (Platform.OS === 'ios') {
-        // iOS 无 GMS 问题，超时仅提示；主引擎晚到的回调仍可把状态翻回 ready。
-        fallbackTimerRef.current = setTimeout(() => {
-          if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
-        }, 8000);
-      }
+    const startExpoEngine = async () => {
+      if (
+        stale()
+        || expoStarted
+        || (winningLiveSource !== null && winningLiveSource !== 'expo-watch')
+      ) return;
+      expoStarted = true;
 
-      // 三条路径同时开始：缓存位置负责秒显；最高精度单次定位抢首拍；watch
-      // 负责后续更新。任何一条原生 Promise 卡住都不会阻塞另外两条。
+      // 缓存位置只负责秒显，永远不能解锁发布或 50 米相遇。
       void Location.getLastKnownPositionAsync()
         .then((last) => {
           if (stale() || !last) return;
@@ -413,9 +452,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
             false
           );
         })
-        .catch(() => {
-          // 缓存未命中不影响两套实时引擎。
-        });
+        .catch(() => undefined);
 
       void Location.getCurrentPositionAsync({
         accuracy: Location.Accuracy.BestForNavigation,
@@ -428,42 +465,201 @@ export function AppProvider({ children }: { children: ReactNode }) {
           'expo-watch',
           true
         ))
-        .catch(() => {
-          // watch 与 Android LocationManager 仍在竞速。
-        });
+        .catch(() => undefined);
 
-      const sub = await Location.watchPositionAsync(
-        {
-          // A 50 m encounter/publish needs a live high-accuracy fix; the
-          // last-known value above remains a UI warm-up only.
-          accuracy: Location.Accuracy.High,
-          timeInterval: 5000,
-          distanceInterval: 10,
-        },
-        (pos) => onFix(
-          pos.coords.latitude,
-          pos.coords.longitude,
-          pos.coords.accuracy ?? null,
-          pos.timestamp ?? null,
-          'expo-watch',
-          true
-        )
-      );
-      if (stale() || winningLiveSource === 'fallback') {
-        removeExpoWatch(sub);
+      try {
+        const sub = await Location.watchPositionAsync(
+          {
+            accuracy: Location.Accuracy.High,
+            timeInterval: 5000,
+            distanceInterval: 10,
+          },
+          (pos) => onFix(
+            pos.coords.latitude,
+            pos.coords.longitude,
+            pos.coords.accuracy ?? null,
+            pos.timestamp ?? null,
+            'expo-watch',
+            true
+          )
+        );
+        if (stale() || (winningLiveSource !== null && winningLiveSource !== 'expo-watch')) {
+          removeExpoWatch(sub);
+          return;
+        }
+        watchRef.current = sub;
+      } catch (error) {
+        console.warn('[app] Expo location start failed:', error);
+        if (stale()) return;
+        if (Platform.OS === 'android') startFallbackEngine();
+        else setLocationStatus((status) => (status === 'ready' ? status : 'unavailable'));
+      }
+    };
+
+    // Android 严格降级：高德未能工作时，才同时启用 Expo 与系统 LocationManager。
+    const startLegacyEngines = () => {
+      if (stale() || legacyStarted || winningLiveSource !== null) return;
+      legacyStarted = true;
+      amapStarted = false;
+      if (fallbackTimerRef.current) {
+        clearTimeout(fallbackTimerRef.current);
+        fallbackTimerRef.current = null;
+      }
+      stopAmapEngine();
+      startFallbackEngine();
+      void startExpoEngine();
+    };
+
+    const armAmapPriorityFallback = () => {
+      if (stale() || legacyStarted || winningLiveSource === 'amap') return;
+      if (fallbackTimerRef.current) clearTimeout(fallbackTimerRef.current);
+      fallbackTimerRef.current = setTimeout(() => {
+        fallbackTimerRef.current = null;
+        if (!stale() && winningLiveSource !== 'amap') startLegacyEngines();
+      }, AMAP_PRIORITY_TIMEOUT_MS);
+    };
+
+    type AmapStartOutcome = 'started' | 'unavailable' | 'awaiting-consent';
+    const startAmapEngine = async (
+      acceptedOverride = false
+    ): Promise<AmapStartOutcome> => {
+      if (
+        Platform.OS !== 'android'
+        || stale()
+        || legacyStarted
+        || (winningLiveSource !== null && winningLiveSource !== 'amap')
+      ) return 'unavailable';
+      if (amapStarted) return 'started';
+
+      try {
+        if (!await isAmapLocationConfigured() || stale()) return 'unavailable';
+        let privacyAccepted = acceptedOverride;
+        if (!privacyAccepted) {
+          privacyAccepted = await AsyncStorage.getItem(AMAP_PRIVACY_CONSENT_KEY) === '1';
+        }
+        if (stale()) return 'unavailable';
+
+        if (!privacyAccepted) {
+          const hasCompletedOnboarding = await AsyncStorage.getItem(ONBOARDED_KEY) === '1';
+          if (stale() || !hasCompletedOnboarding || amapConsentPromptedRef.current) {
+            return 'unavailable';
+          }
+          amapConsentPromptedRef.current = true;
+          Alert.alert(
+            '启用高德融合定位',
+            '为改善荣耀、华为手机在室内的定位精度，Here 将使用北京高德图强科技有限公司提供的高德开放平台定位 SDK，并处理经纬度、Wi-Fi/网络与基站、设备及传感器信息。是否同意并启用？',
+            [
+              {
+                text: '暂不使用',
+                style: 'cancel',
+                onPress: startLegacyEngines,
+              },
+              {
+                text: '查看政策',
+                onPress: () => {
+                  amapConsentPromptedRef.current = false;
+                  startLegacyEngines();
+                  void Linking.openURL(AMAP_PRIVACY_POLICY_URL).catch(() => undefined);
+                },
+              },
+              {
+                text: '同意并启用',
+                onPress: () => {
+                  void AsyncStorage.setItem(AMAP_PRIVACY_CONSENT_KEY, '1')
+                    .then(async () => {
+                      if (stale()) return;
+                      const outcome = await startAmapEngine(true);
+                      if (stale()) return;
+                      if (outcome === 'started') armAmapPriorityFallback();
+                      else startLegacyEngines();
+                    })
+                    .catch(() => {
+                      if (!stale()) startLegacyEngines();
+                    });
+                },
+              },
+            ],
+            { cancelable: false }
+          );
+          return 'awaiting-consent';
+        }
+
+        if (stale() || legacyStarted || winningLiveSource !== null) return 'unavailable';
+        amapStarted = true;
+        amapLocationSubscriptionRef.current = addAmapLocationListener((event) => {
+          const coordinate = event.coordinateSystem === 'gcj02'
+            ? gcj02ToWgs84(event.lat, event.lng)
+            : { lat: event.lat, lng: event.lng };
+          onFix(
+            coordinate.lat,
+            coordinate.lng,
+            event.accuracy,
+            event.timestamp,
+            'amap',
+            event.isLive
+          );
+        });
+        amapErrorSubscriptionRef.current = addAmapLocationErrorListener((event) => {
+          if (stale() || amapErrorLogged) return;
+          amapErrorLogged = true;
+          console.warn(`[app] AMap location error ${event.code}: ${event.message}`);
+          if (winningLiveSource === 'amap') winningLiveSource = null;
+          amapStarted = false;
+          startLegacyEngines();
+        });
+        const started = await startAmapLocation({ privacyAccepted: true, intervalMs: 2000 });
+        if (
+          stale()
+          || !started
+          || legacyStarted
+          || (winningLiveSource !== null && winningLiveSource !== 'amap')
+        ) {
+          amapStarted = false;
+          stopAmapEngine();
+          return 'unavailable';
+        }
+        return 'started';
+      } catch (error) {
+        amapStarted = false;
+        stopAmapEngine();
+        if (!stale()) console.warn('[app] AMap location start failed:', error);
+        return 'unavailable';
+      }
+    };
+
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (stale()) return;
+      if (status !== 'granted') {
+        setLocationStatus('denied');
         return;
       }
-      watchRef.current = sub;
-    } catch (e) {
-      console.warn('[app] location start failed:', e);
+
+      if (Platform.OS === 'android') {
+        const outcome = await startAmapEngine();
+        if (stale()) return;
+        if (outcome === 'started') armAmapPriorityFallback();
+        else if (outcome === 'unavailable') startLegacyEngines();
+        return;
+      }
+
+      if (Platform.OS === 'ios') {
+        fallbackTimerRef.current = setTimeout(() => {
+          if (!stale()) setLocationStatus((s) => (s === 'ready' ? s : 'unavailable'));
+        }, 8000);
+      }
+      void startExpoEngine();
+    } catch (error) {
+      console.warn('[app] location permission/start failed:', error);
       if (stale()) return;
-      // Android 主引擎任何一步异常都还有备用引擎可试；iOS/web 无备用，直接终态
-      if (Platform.OS === 'android') startFallbackEngine();
+      if (Platform.OS === 'android') startLegacyEngines();
       else setLocationStatus('unavailable');
     }
-  }, [stopLocationEngines]);
+  }, [stopAmapEngine, stopLocationEngines]);
 
   const retryLocation = useCallback(() => {
+    automaticLocationRetryCountRef.current = 0;
+    lastAutomaticLocationRetryAtRef.current = 0;
     startLocation();
   }, [startLocation]);
 
@@ -473,7 +669,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
   }, [locationStatus]);
 
   // 前台持续自愈：首次粗定位保留 15 秒改善窗口；之后若坐标过期、缺失或
-  // 精度仍大于 30 米，则重新启动双引擎。45 秒冷却避免弱信号环境反复重启 GPS。
+  // 精度仍大于 30 米，则最多重启两次。其后保持引擎运行等待信号改善，避免
+  // 室内弱信号导致 GPS 无限重启和持续耗电。
   useEffect(() => {
     if (Platform.OS === 'web') return undefined;
 
@@ -487,10 +684,12 @@ export function AppProvider({ children }: { children: ReactNode }) {
         locationFixRef.current,
         now,
         locationRunStartedAtRef.current,
-        lastAutomaticLocationRetryAtRef.current
+        lastAutomaticLocationRetryAtRef.current,
+        automaticLocationRetryCountRef.current
       )) return;
 
       lastAutomaticLocationRetryAtRef.current = now;
+      automaticLocationRetryCountRef.current += 1;
       startLocation();
     }, 5_000);
 
@@ -500,7 +699,11 @@ export function AppProvider({ children }: { children: ReactNode }) {
   // 权限被拒后去系统设置开了权限，回到 App 时自动重试（仅 denied 态，不打断正常流程）
   useEffect(() => {
     const sub = AppState.addEventListener('change', (s) => {
-      if (s === 'active' && locationStatusRef.current === 'denied') startLocation();
+      if (s === 'active' && locationStatusRef.current === 'denied') {
+        automaticLocationRetryCountRef.current = 0;
+        lastAutomaticLocationRetryAtRef.current = 0;
+        startLocation();
+      }
     });
     return () => sub.remove();
   }, [startLocation]);
@@ -593,7 +796,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch {
       // 持久化失败则下次启动再引导一次，不阻塞进入
     }
-  }, []);
+    retryLocation();
+  }, [retryLocation]);
 
   const gpsLocation = useMemo<LatLng | null>(
     () => (locationFix ? { lat: locationFix.lat, lng: locationFix.lng } : null),

@@ -1,0 +1,22 @@
+plugins {
+  id 'com.android.library'
+  id 'expo-module-gradle-plugin'
+}
+
+group = 'expo.modules.amaplocation'
+version = '1.0.0'
+
+android {
+  namespace 'expo.modules.amaplocation'
+  defaultConfig {
+    versionCode 1
+    versionName '1.0.0'
+    consumerProguardFiles('proguard-rules.pro')
+  }
+}
+
+dependencies {
+  // Pinned for reproducible builds. This is the newest standalone location
+  // artifact currently published to Maven Central by AMap.
+  implementation 'com.amap.api:location:11.2.100'
+}

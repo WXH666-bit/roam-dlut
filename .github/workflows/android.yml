@@ -16,17 +16,24 @@ jobs:
       EXPO_PUBLIC_BACKEND_BASE_URL: ${{ vars.BACKEND_BASE_URL }}
       # 可选；不设置时自动使用 BACKEND_BASE_URL/api/v1/updates/manifest
       EXPO_PUBLIC_OTA_UPDATE_URL: ${{ vars.OTA_UPDATE_URL }}
+      # 只在 prebuild 时写入 AndroidManifest；在高德控制台绑定包名和签名 SHA-1。
+      AMAP_ANDROID_API_KEY: ${{ secrets.AMAP_ANDROID_API_KEY }}
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: 检查后端地址变量（防打出指向 localhost 的废包）
+      - name: 检查 Android 构建变量
         run: |
           if [ -z "$EXPO_PUBLIC_BACKEND_BASE_URL" ]; then
             echo "::error::未配置 BACKEND_BASE_URL 仓库变量！请到仓库 Settings → Secrets and variables → Actions → Variables 新建 BACKEND_BASE_URL（形如 http://<公网IP>:9091），再重新运行本 workflow。"
             exit 1
           fi
+          if [ -z "$AMAP_ANDROID_API_KEY" ]; then
+            echo "::error::未配置 AMAP_ANDROID_API_KEY 仓库 Secret！新版 APK 将无法启用高德主定位。"
+            exit 1
+          fi
           echo "后端地址: $EXPO_PUBLIC_BACKEND_BASE_URL"
+          echo "高德 Android Key: 已配置"
 
       # pnpm/action-setup@v4 自动读取根 package.json 的 packageManager 字段（pnpm@9.0.0）
       # 不要再传 with.version，否则与 packageManager 冲突报 ERR_PNPM_BAD_PM_VERSION
@@ -57,6 +64,21 @@ jobs:
         working-directory: client
         run: pnpm exec expo prebuild --platform android --no-install
 
+      - name: 校验高德 Key 绑定的 APK 签名 SHA-1
+        shell: bash
+        run: |
+          EXPECTED_SHA1='5E:8F:16:06:2E:A3:CD:2C:4A:0D:54:78:76:BA:A6:F3:8C:AB:F6:25'
+          ACTUAL_SHA1="$(keytool -list -v \
+            -keystore client/android/app/debug.keystore \
+            -alias androiddebugkey \
+            -storepass android \
+            -keypass android | sed -n 's/^[[:space:]]*SHA1: //p' | head -1)"
+          if [ "$ACTUAL_SHA1" != "$EXPECTED_SHA1" ]; then
+            echo "::error::APK 签名 SHA-1 已变化。请重新绑定高德 Android Key，并同步更新 workflow 中的 EXPECTED_SHA1。"
+            exit 1
+          fi
+          echo "OK: APK signing SHA-1=$ACTUAL_SHA1"
+
       - name: 校验明文流量配置已写入 AndroidManifest（withCleartextTraffic 插件生效）
         run: |
           MANIFEST=client/android/app/src/main/AndroidManifest.xml
@@ -68,12 +90,22 @@ jobs:
           fi
           echo "OK: $MANIFEST 已包含 usesCleartextTraffic=true"
 
-      - name: 校验后台守候服务与权限已合并
+      - name: 校验高德主定位、后台守候服务与权限已合并
         shell: bash
         run: |
           APP_MANIFEST=client/android/app/src/main/AndroidManifest.xml
+          AMAP_MANIFEST=client/modules/amap-location/android/src/main/AndroidManifest.xml
           GUARDIAN_MANIFEST=client/modules/background-guardian/android/src/main/AndroidManifest.xml
           AUTOLINK_OUTPUT="$(client/node_modules/.bin/expo-modules-autolinking resolve --platform android --project-root client)"
+          grep -Fq '@here/amap-location' <<<"$AUTOLINK_OUTPUT" || {
+            echo "::error::高德定位原生模块未被 Expo autolinking 识别"; exit 1;
+          }
+          grep -Fq 'com.amap.api.location.APSService' "$AMAP_MANIFEST" || {
+            echo "::error::高德 APSService 未声明"; exit 1;
+          }
+          grep -Fq 'com.amap.api.v2.apikey' "$APP_MANIFEST" || {
+            echo "::error::高德 Android Key 未写入原生 Manifest"; exit 1;
+          }
           grep -Fq '@cidi/background-guardian' <<<"$AUTOLINK_OUTPUT" || {
             echo "::error::BackgroundGuardian 原生模块未被 Expo autolinking 识别"; exit 1;
           }
@@ -89,7 +121,7 @@ jobs:
           grep -Fq 'android:foregroundServiceType="location"' "$GUARDIAN_MANIFEST" || {
             echo "::error::守候服务未声明 foregroundServiceType=location"; exit 1;
           }
-          echo "OK: LocationManager 守候服务已 autolink，后台定位权限已写入原生工程"
+          echo "OK: 高德主定位与 LocationManager 守候服务已 autolink，Key 和定位权限已写入原生工程"
 
       - name: 校验自托管热更新配置已写入 APK 原生工程
         shell: bash
