@@ -1,7 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import Geolocation from 'react-native-geolocation-service';
-import { Alert, AppState, Linking, Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import React, {
   createContext,
   useCallback,
@@ -80,6 +80,8 @@ interface AppContextValue {
   getLatestLocationFix: () => LocationFix | null;
   /** 定位流程是否已离开"定位中"（ready/denied/unavailable 任一终态） */
   locationReady: boolean;
+  /** 首次前台定位权限检查已结束；供其余启动权限按顺序继续。 */
+  locationPermissionResolved: boolean;
   locationStatus: LocationStatus;
   /** 手动重试定位（重走权限请求与双引擎全流程） */
   retryLocation: () => void;
@@ -108,8 +110,6 @@ const AppContext = createContext<AppContextValue | null>(null);
 const READ_IDS_KEY = READ_IDS_STORAGE_KEY;
 const DEVICE_TOKEN_KEY = 'cidi:device_token';
 const ONBOARDED_KEY = 'cidi:onboarded';
-const AMAP_PRIVACY_CONSENT_KEY = 'here:amap_privacy_consent:v1';
-const AMAP_PRIVACY_POLICY_URL = 'https://lbs.amap.com/pages/privacy/';
 const AMAP_PRIORITY_TIMEOUT_MS = 8_000;
 const POLL_INTERVAL = 30_000;
 
@@ -129,6 +129,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const [locationFix, setLocationFix] = useState<LocationFix | null>(null);
   const locationFixRef = useRef<LocationFix | null>(null);
   const [locationStatus, setLocationStatus] = useState<LocationStatus>('locating');
+  const [locationPermissionResolved, setLocationPermissionResolved] = useState(false);
   const [demoMode, setDemoModeState] = useState(false);
   const [mockLocation, setMockLocationState] = useState<LatLng | null>(null);
   const [aliveMessages, setAliveMessages] = useState<AliveMessageBrief[]>([]);
@@ -141,7 +142,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
   const geoWatchIdRef = useRef<number | null>(null);
   const amapLocationSubscriptionRef = useRef<{ remove(): void } | null>(null);
   const amapErrorSubscriptionRef = useRef<{ remove(): void } | null>(null);
-  const amapConsentPromptedRef = useRef(false);
   const fallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const fallbackWatchdogRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // 定位流程令牌：重入（retry）或卸载时递增，作废旧流程的异步回调
@@ -519,10 +519,8 @@ export function AppProvider({ children }: { children: ReactNode }) {
       }, AMAP_PRIORITY_TIMEOUT_MS);
     };
 
-    type AmapStartOutcome = 'started' | 'unavailable' | 'awaiting-consent';
-    const startAmapEngine = async (
-      acceptedOverride = false
-    ): Promise<AmapStartOutcome> => {
+    type AmapStartOutcome = 'started' | 'unavailable';
+    const startAmapEngine = async (): Promise<AmapStartOutcome> => {
       if (
         Platform.OS !== 'android'
         || stale()
@@ -533,57 +531,6 @@ export function AppProvider({ children }: { children: ReactNode }) {
 
       try {
         if (!await isAmapLocationConfigured() || stale()) return 'unavailable';
-        let privacyAccepted = acceptedOverride;
-        if (!privacyAccepted) {
-          privacyAccepted = await AsyncStorage.getItem(AMAP_PRIVACY_CONSENT_KEY) === '1';
-        }
-        if (stale()) return 'unavailable';
-
-        if (!privacyAccepted) {
-          const hasCompletedOnboarding = await AsyncStorage.getItem(ONBOARDED_KEY) === '1';
-          if (stale() || !hasCompletedOnboarding || amapConsentPromptedRef.current) {
-            return 'unavailable';
-          }
-          amapConsentPromptedRef.current = true;
-          Alert.alert(
-            '启用高德融合定位',
-            '为改善荣耀、华为手机在室内的定位精度，Here 将使用北京高德图强科技有限公司提供的高德开放平台定位 SDK，并处理经纬度、Wi-Fi/网络与基站、设备及传感器信息。是否同意并启用？',
-            [
-              {
-                text: '暂不使用',
-                style: 'cancel',
-                onPress: startLegacyEngines,
-              },
-              {
-                text: '查看政策',
-                onPress: () => {
-                  amapConsentPromptedRef.current = false;
-                  startLegacyEngines();
-                  void Linking.openURL(AMAP_PRIVACY_POLICY_URL).catch(() => undefined);
-                },
-              },
-              {
-                text: '同意并启用',
-                onPress: () => {
-                  void AsyncStorage.setItem(AMAP_PRIVACY_CONSENT_KEY, '1')
-                    .then(async () => {
-                      if (stale()) return;
-                      const outcome = await startAmapEngine(true);
-                      if (stale()) return;
-                      if (outcome === 'started') armAmapPriorityFallback();
-                      else startLegacyEngines();
-                    })
-                    .catch(() => {
-                      if (!stale()) startLegacyEngines();
-                    });
-                },
-              },
-            ],
-            { cancelable: false }
-          );
-          return 'awaiting-consent';
-        }
-
         if (stale() || legacyStarted || winningLiveSource !== null) return 'unavailable';
         amapStarted = true;
         amapLocationSubscriptionRef.current = addAmapLocationListener((event) => {
@@ -628,9 +575,13 @@ export function AppProvider({ children }: { children: ReactNode }) {
     };
 
     try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
+      let permission = await Location.getForegroundPermissionsAsync();
+      if (permission.status === Location.PermissionStatus.UNDETERMINED) {
+        permission = await Location.requestForegroundPermissionsAsync();
+      }
       if (stale()) return;
-      if (status !== 'granted') {
+      setLocationPermissionResolved(true);
+      if (permission.status !== Location.PermissionStatus.GRANTED) {
         setLocationStatus('denied');
         return;
       }
@@ -652,6 +603,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch (error) {
       console.warn('[app] location permission/start failed:', error);
       if (stale()) return;
+      setLocationPermissionResolved(true);
       if (Platform.OS === 'android') startLegacyEngines();
       else setLocationStatus('unavailable');
     }
@@ -708,15 +660,16 @@ export function AppProvider({ children }: { children: ReactNode }) {
     return () => sub.remove();
   }, [startLocation]);
 
-  // GPS 监听（前台，低频省电）；首拍异步触发，避免在 effect 内同步 setState
+  // 首次引导完成后再请求定位；其余启动权限等待这一步结束后串行处理。
   useEffect(() => {
+    if (onboarded !== true) return undefined;
     const first = setTimeout(startLocation, 0);
     return () => {
       clearTimeout(first);
       locationRunRef.current += 1;
       stopLocationEngines();
     };
-  }, [startLocation, stopLocationEngines]);
+  }, [onboarded, startLocation, stopLocationEngines]);
 
   const refreshMessages = useCallback(async () => {
     try {
@@ -796,8 +749,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     } catch {
       // 持久化失败则下次启动再引导一次，不阻塞进入
     }
-    retryLocation();
-  }, [retryLocation]);
+  }, []);
 
   const gpsLocation = useMemo<LatLng | null>(
     () => (locationFix ? { lat: locationFix.lat, lng: locationFix.lng } : null),
@@ -826,6 +778,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
       locationFix,
       getLatestLocationFix,
       locationReady,
+      locationPermissionResolved,
       locationStatus,
       retryLocation,
       demoMode,
@@ -845,7 +798,7 @@ export function AppProvider({ children }: { children: ReactNode }) {
     [
       deviceId, deviceToken, user, adoptIdentity, location, locationAccuracy,
       locationTimestamp, locationSource, locationIsLive, locationFix,
-      getLatestLocationFix, locationReady,
+      getLatestLocationFix, locationReady, locationPermissionResolved,
       locationStatus, retryLocation, demoMode, mockLocation,
       setDemoMode, setMockLocation, aliveMessages, aliveTotal, refreshMessages, readIds, readIdsReady, markRead,
       onboarded, completeOnboarding, readLimit,

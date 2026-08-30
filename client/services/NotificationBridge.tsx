@@ -45,6 +45,9 @@ import {
 const PERMISSION_GUIDE_KEY = 'cidi:permission_guide_v1';
 const POLL_INTERVAL_MS = 30_000;
 
+type PermissionGuideDecision = 'accepted' | 'declined' | 'already-decided';
+let permissionGuideInFlight: Promise<PermissionGuideDecision> | null = null;
+
 const waitForChoice = (title: string, message: string): Promise<boolean> => new Promise((resolve) => {
   Alert.alert(
     title,
@@ -61,10 +64,7 @@ const waitForChoice = (title: string, message: string): Promise<boolean> => new 
 const requestBackgroundLocation = async (): Promise<boolean> => {
   if (Platform.OS === 'web') return false;
   try {
-    let foreground = await Location.getForegroundPermissionsAsync();
-    if (foreground.status !== 'granted') {
-      foreground = await Location.requestForegroundPermissionsAsync();
-    }
+    const foreground = await Location.getForegroundPermissionsAsync();
     if (foreground.status !== 'granted') return false;
 
     let background = await Location.getBackgroundPermissionsAsync();
@@ -95,15 +95,35 @@ const requestBackgroundLocation = async (): Promise<boolean> => {
   }
 };
 
-const showPermissionGuideOnce = async (): Promise<boolean> => {
+const showPermissionGuideOnce = async (): Promise<PermissionGuideDecision> => {
+  if (permissionGuideInFlight) return permissionGuideInFlight;
+  permissionGuideInFlight = (async () => {
+    try {
+      if (await AsyncStorage.getItem(PERMISSION_GUIDE_KEY)) return 'already-decided';
+      const accepted = await waitForChoice(
+        '开启通知与后台守候',
+        '开启通知，你会知道有人喜欢了你的留言；允许始终访问位置，App 不在前台时也能提醒附近 50 米内的新留言。两项权限都可以稍后在系统设置里修改。'
+      );
+      try {
+        await AsyncStorage.setItem(PERMISSION_GUIDE_KEY, accepted ? 'accepted' : 'declined');
+      } catch {
+        // The current choice still takes effect even if persistence is unavailable.
+      }
+      return accepted ? 'accepted' : 'declined';
+    } catch {
+      return 'declined';
+    }
+  })();
   try {
-    if (await AsyncStorage.getItem(PERMISSION_GUIDE_KEY)) return true;
-    const accepted = await waitForChoice(
-      '开启通知与后台守候',
-      '开启通知，你会知道有人喜欢了你的留言；允许始终访问位置，App 不在前台时也能提醒附近 50 米内的新留言。两项权限都可以稍后在系统设置里修改。'
-    );
-    await AsyncStorage.setItem(PERMISSION_GUIDE_KEY, '1');
-    return accepted;
+    return await permissionGuideInFlight;
+  } finally {
+    permissionGuideInFlight = null;
+  }
+};
+
+const getBackgroundLocationGranted = async (): Promise<boolean> => {
+  try {
+    return (await Location.getBackgroundPermissionsAsync()).status === 'granted';
   } catch {
     return false;
   }
@@ -142,6 +162,7 @@ export function NotificationBridge() {
     deviceId,
     deviceToken,
     locationFix,
+    locationPermissionResolved,
     aliveMessages,
     readIds,
     readIdsReady,
@@ -158,6 +179,7 @@ export function NotificationBridge() {
   const androidGuardianHandoffCountRef = useRef(0);
   const androidGuardianOwnedEventsRef = useRef(false);
   const pendingLikePayloadsRef = useRef<NotificationRuntimePayload[]>([]);
+  const permissionFlowStartedRef = useRef(false);
   const renderedIdentityRef = useRef(deviceId);
   const identityGenerationRef = useRef(0);
   if (renderedIdentityRef.current !== deviceId) {
@@ -325,19 +347,25 @@ export function NotificationBridge() {
     return () => sub.remove();
   }, []);
 
-  // Explain permissions only after onboarding, then request them in a readable order.
+  // Wait for the foreground location decision, then handle every remaining
+  // startup permission serially. A stored choice is never prompted again.
   useEffect(() => {
-    if (!onboarded || !deviceId || Platform.OS === 'web') return;
+    if (
+      !onboarded || !deviceId || !locationPermissionResolved || Platform.OS === 'web'
+      || permissionFlowStartedRef.current
+    ) return;
+    permissionFlowStartedRef.current = true;
     let cancelled = false;
     void (async () => {
-      const accepted = await showPermissionGuideOnce();
+      const decision = await showPermissionGuideOnce();
       if (cancelled) return;
-      // “暂不” really defers both permission flows until a later launch.
-      if (!accepted) return;
-      await requestNotificationPermission();
-      // Even if notification permission is declined, try the location flow: the
-      // core app and the Android guardian remain useful without notifications.
-      const locationGranted = await requestBackgroundLocation();
+      let locationGranted = await getBackgroundLocationGranted();
+      if (decision === 'accepted') {
+        await requestNotificationPermission();
+        // Even if notification permission is declined, background location can
+        // still power the guardian after the app leaves the foreground.
+        locationGranted = await requestBackgroundLocation();
+      }
       if (!cancelled) {
         setBackgroundLocationGranted(locationGranted);
         setPermissionRevision((revision) => revision + 1);
@@ -346,7 +374,7 @@ export function NotificationBridge() {
     return () => {
       cancelled = true;
     };
-  }, [onboarded, deviceId]);
+  }, [onboarded, deviceId, locationPermissionResolved]);
 
   // Pick up a permission changed manually in Settings when the app becomes
   // active again. A denied “Always” permission never starts the guardian.
